@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>iRacing Results Viewer</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #f8f8f8;
+      color: #222;
+    }
+    h1, h2 { color: #333; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 20px;
+      background: white;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+      cursor: default;
+    }
+    th {
+      background-color: #eaeaea;
+      user-select: none;
+    }
+    th.sortable {
+      cursor: pointer;
+    }
+    tr:nth-child(even) { background: #f3f3f3; }
+    .info {
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 10px;
+    }
+    select {
+      margin-top: 10px;
+      padding: 6px;
+      border-radius: 5px;
+      border: 1px solid #aaa;
+      font-size: 14px;
+    }
+    .sortable:hover { background: #dcdcdc; }
+    .asc::after { content: " ▲"; }
+    .desc::after { content: " ▼"; }
+    .error {
+      color: darkred;
+      background: #ffeeee;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid #dd9999;
+    }
+  </style>
+</head>
+<body>
+  <h1 id="race-title">Loading Results...</h1>
+  <div class="info" id="race-info"></div>
+
+  <label for="classFilter"><strong>Filter by class:</strong></label>
+  <select id="classFilter">
+    <option value="all">All Classes</option>
+  </select>
+
+  <table id="results-table">
+    <thead>
+      <tr>
+        <th class="sortable">Pos</th>
+        <th class="sortable">Team</th>
+        <th class="sortable">Drivers</th>
+        <th>Car</th>
+        <th class="sortable">Best Lap (s)</th>
+        <th class="sortable">Laps</th>
+        <th class="sortable">Incidents</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    let allResults = [];
+    let selectedClass = "all";
+
+    function getQueryParam(param) {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(param);
+    }
+
+    async function loadResults() {
+      const file = getQueryParam("file");
+      if (!file) {
+        document.body.innerHTML = `
+          <div class="error">
+            ⚠️ No JSON file specified.<br>
+            Usage example:<br>
+            <code>?file=eventresult-80288262.json</code>
+          </div>`;
+        return;
+      }
+
+      try {
+        const response = await fetch(file);
+        if (!response.ok) throw new Error(`File not found: ${file}`);
+        const json = await response.json();
+        const data = json.data;
+
+        // --- Header info ---
+        document.getElementById("race-title").innerText = data.season_name;
+        document.getElementById("race-info").innerHTML = `
+          <strong>Series:</strong> ${data.series_name}<br>
+          <strong>Date:</strong> ${new Date(data.end_time).toLocaleString()}<br>
+          <strong>Car Classes:</strong> ${data.car_classes.map(c => c.name).join(", ")}<br>
+          <strong>Total Drivers:</strong> ${data.num_drivers}
+        `;
+
+        // --- Pick best session (Race > Quali > Practice) ---
+        const sessions = data.session_results || [];
+        let session =
+          sessions.find(s => s.simsession_type_name?.toLowerCase().includes("race")) ||
+          sessions.find(s => s.simsession_type_name?.toLowerCase().includes("qual")) ||
+          sessions.find(s => s.simsession_type_name?.toLowerCase().includes("prac"));
+
+        if (!session) {
+          document.getElementById("race-info").innerHTML +=
+            "<br><em>No valid session found in this file.</em>";
+          return;
+        }
+
+        // --- Subtitle ---
+        const subtitle = document.createElement("h2");
+        subtitle.textContent = session.simsession_name || "Session Results";
+        document.body.insertBefore(subtitle, document.querySelector("#results-table"));
+
+        // --- Store all results ---
+        allResults = session.results || [];
+
+        // --- Populate filter dropdown ---
+        const classes = [...new Set(allResults.map(r => r.car_class_name))].sort();
+        const select = document.getElementById("classFilter");
+        classes.forEach(c => {
+          const opt = document.createElement("option");
+          opt.value = c;
+          opt.textContent = c;
+          select.appendChild(opt);
+        });
+
+        select.addEventListener("change", (e) => {
+          selectedClass = e.target.value;
+          renderTable();
+        });
+
+        // --- Render ---
+        renderTable();
+        enableTableSorting();
+
+      } catch (err) {
+        document.body.innerHTML = `<div class="error">⚠️ ${err.message}</div>`;
+        console.error(err);
+      }
+    }
+
+    function renderTable() {
+      const tbody = document.querySelector("#results-table tbody");
+      tbody.innerHTML = "";
+
+      let resultsToShow = allResults;
+      if (selectedClass !== "all") {
+        resultsToShow = allResults.filter(r => r.car_class_name === selectedClass);
+      }
+
+      resultsToShow.forEach(team => {
+        const drivers = team.driver_results?.map(d => d.display_name).join(", ") || "—";
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${team.finish_position + 1}</td>
+          <td>${team.display_name}</td>
+          <td>${drivers}</td>
+          <td>${team.car_class_name}</td>
+          <td>${team.best_lap_time > 0 ? (team.best_lap_time / 1000).toFixed(3) : "-"}</td>
+          <td>${team.laps_complete}</td>
+          <td>${team.incidents}</td>
+        `;
+        tbody.appendChild(row);
+      });
+    }
+
+    function enableTableSorting() {
+      const table = document.getElementById("results-table");
+      const headers = table.querySelectorAll("th.sortable");
+
+      headers.forEach((header, index) => {
+        header.addEventListener("click", () => {
+          const tbody = table.querySelector("tbody");
+          const rows = Array.from(tbody.querySelectorAll("tr"));
+          const isNumeric = index === 0 || index === 4 || index === 5 || index === 6;
+          const currentDir = header.classList.contains("asc") ? "asc" :
+                             header.classList.contains("desc") ? "desc" : null;
+          const newDir = currentDir === "asc" ? "desc" : "asc";
+
+          headers.forEach(h => h.classList.remove("asc", "desc"));
+          header.classList.add(newDir);
+
+          rows.sort((a, b) => {
+            const valA = a.children[index].innerText.trim();
+            const valB = b.children[index].innerText.trim();
+            if (isNumeric) {
+              const numA = parseFloat(valA) || 0;
+              const numB = parseFloat(valB) || 0;
+              return newDir === "asc" ? numA - numB : numB - numA;
+            } else {
+              return newDir === "asc"
+                ? valA.localeCompare(valB)
+                : valB.localeCompare(valA);
+            }
+          });
+
+          tbody.innerHTML = "";
+          rows.forEach(r => tbody.appendChild(r));
+        });
+      });
+    }
+
+    loadResults();
+  </script>
+</body>
+</html>
