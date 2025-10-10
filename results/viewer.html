@@ -27,9 +27,7 @@
       background-color: #eaeaea;
       user-select: none;
     }
-    th.sortable {
-      cursor: pointer;
-    }
+    th.sortable { cursor: pointer; }
     tr:nth-child(even) { background: #f3f3f3; }
     .info {
       background: white;
@@ -55,6 +53,9 @@
       border-radius: 5px;
       border: 1px solid #dd9999;
     }
+    .highlight-team {
+      background-color: #e4c1f9 !important;
+    }
   </style>
 </head>
 <body>
@@ -73,7 +74,7 @@
         <th class="sortable">Team</th>
         <th class="sortable">Drivers</th>
         <th>Car</th>
-        <th class="sortable">Best Lap (s)</th>
+        <th class="sortable">Best Lap</th>
         <th class="sortable">Laps</th>
         <th class="sortable">Incidents</th>
       </tr>
@@ -84,6 +85,7 @@
   <script>
     let allResults = [];
     let selectedClass = "all";
+    const teamName = "Krosse Krabbe Racing"; // 👈 Change this if your team name differs
 
     function getQueryParam(param) {
       const urlParams = new URLSearchParams(window.location.search);
@@ -109,15 +111,20 @@
         const data = json.data;
 
         // --- Header info ---
+        const sof = data.event_strength_of_field || "—";
+        const leadChanges = data.num_lead_changes ?? "—";
+
         document.getElementById("race-title").innerText = data.season_name;
         document.getElementById("race-info").innerHTML = `
           <strong>Series:</strong> ${data.series_name}<br>
           <strong>Date:</strong> ${new Date(data.end_time).toLocaleString()}<br>
           <strong>Car Classes:</strong> ${data.car_classes.map(c => c.name).join(", ")}<br>
-          <strong>Total Drivers:</strong> ${data.num_drivers}
+          <strong>Total Drivers:</strong> ${data.num_drivers}<br>
+          <strong>Strength of Field:</strong> ${sof}<br>
+          <strong>Lead Changes:</strong> ${leadChanges}
         `;
 
-        // --- Pick best session (Race > Quali > Practice) ---
+        // --- Pick session ---
         const sessions = data.session_results || [];
         let session =
           sessions.find(s => s.simsession_type_name?.toLowerCase().includes("race")) ||
@@ -138,7 +145,7 @@
         // --- Store all results ---
         allResults = session.results || [];
 
-        // --- Populate filter dropdown ---
+        // --- Class dropdown ---
         const classes = [...new Set(allResults.map(r => r.car_class_name))].sort();
         const select = document.getElementById("classFilter");
         classes.forEach(c => {
@@ -147,20 +154,26 @@
           opt.textContent = c;
           select.appendChild(opt);
         });
-
-        select.addEventListener("change", (e) => {
+        select.addEventListener("change", e => {
           selectedClass = e.target.value;
           renderTable();
         });
 
-        // --- Render ---
         renderTable();
         enableTableSorting();
-
       } catch (err) {
         document.body.innerHTML = `<div class="error">⚠️ ${err.message}</div>`;
         console.error(err);
       }
+    }
+
+    function formatBestLap(ms) {
+      if (!ms || ms <= 0) return "-";
+      const totalSeconds = ms / 1000;
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = Math.floor(totalSeconds % 60);
+      const millis = Math.round((totalSeconds % 1) * 1000);
+      return `${minutes}:${seconds.toString().padStart(2, "0")}.${millis.toString().padStart(3, "0")}`;
     }
 
     function renderTable() {
@@ -174,13 +187,18 @@
 
       resultsToShow.forEach(team => {
         const drivers = team.driver_results?.map(d => d.display_name).join(", ") || "—";
+        const bestLap = formatBestLap(team.best_lap_time);
         const row = document.createElement("tr");
+        if (team.display_name?.trim().toLowerCase() === teamName.toLowerCase()) {
+          row.classList.add("highlight-team");
+        }
+
         row.innerHTML = `
           <td>${team.finish_position + 1}</td>
           <td>${team.display_name}</td>
           <td>${drivers}</td>
           <td>${team.car_class_name}</td>
-          <td>${team.best_lap_time > 0 ? (team.best_lap_time / 1000).toFixed(3) : "-"}</td>
+          <td>${bestLap}</td>
           <td>${team.laps_complete}</td>
           <td>${team.incidents}</td>
         `;
@@ -196,7 +214,7 @@
         header.addEventListener("click", () => {
           const tbody = table.querySelector("tbody");
           const rows = Array.from(tbody.querySelectorAll("tr"));
-          const isNumeric = index === 0 || index === 4 || index === 5 || index === 6;
+          const isNumeric = index === 0 || index === 5 || index === 6;
           const currentDir = header.classList.contains("asc") ? "asc" :
                              header.classList.contains("desc") ? "desc" : null;
           const newDir = currentDir === "asc" ? "desc" : "asc";
@@ -207,9 +225,10 @@
           rows.sort((a, b) => {
             const valA = a.children[index].innerText.trim();
             const valB = b.children[index].innerText.trim();
+
             if (isNumeric) {
-              const numA = parseFloat(valA) || 0;
-              const numB = parseFloat(valB) || 0;
+              const numA = parseFloat(valA.replace(":", "")) || 0;
+              const numB = parseFloat(valB.replace(":", "")) || 0;
               return newDir === "asc" ? numA - numB : numB - numA;
             } else {
               return newDir === "asc"
