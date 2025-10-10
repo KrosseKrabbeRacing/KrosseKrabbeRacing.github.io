@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Race Results - Petit Le Mans</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #fafafa; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background-color: #eee; }
+    h1, h2 { color: #333; }
+  </style>
+</head>
+<body>
+  <h1 id="race-title">Race Results</h1>
+  <div id="race-info"></div>
+  <table id="results-table">
+    <thead>
+      <tr>
+        <th>Pos</th>
+        <th>Team</th>
+        <th>Drivers</th>
+        <th>Car</th>
+        <th>Best Lap (s)</th>
+        <th>Laps</th>
+        <th>Incidents</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    async function loadResults() {
+      const response = await fetch('eventresult-80288262.json');
+      const json = await response.json();
+      const data = json.data;
+      document.getElementById("race-title").innerText = data.season_name;
+      document.getElementById("race-info").innerHTML = `
+        <strong>Event:</strong> ${data.series_name} <br>
+        <strong>Date:</strong> ${new Date(data.end_time).toLocaleString()} <br>
+        <strong>Car Class:</strong> ${data.car_classes.map(c => c.name).join(", ")} <br>
+        <strong>Drivers:</strong> ${data.num_drivers}
+      `;
+
+      const results = data.session_results[0].results; // e.g. PRACTICE or RACE
+      const tbody = document.querySelector("#results-table tbody");
+
+      results.forEach(team => {
+        const drivers = team.driver_results.map(d => d.display_name).join(", ");
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${team.finish_position + 1}</td>
+          <td>${team.display_name}</td>
+          <td>${drivers}</td>
+          <td>${team.car_name}</td>
+          <td>${(team.best_lap_time / 1000).toFixed(3)}</td>
+          <td>${team.laps_complete}</td>
+          <td>${team.incidents}</td>
+        `;
+        tbody.appendChild(row);
+      });
+    }
+
+    loadResults();
+  </script>
+</body>
+</html>
