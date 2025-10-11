@@ -1,60 +1,32 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8" />
   <title>iRacing Results Viewer</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 20px;
-      background: #f8f8f8;
-      color: #222;
-    }
-    h1, h2 { color: #333; }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      margin-top: 20px;
-      background: white;
-    }
-    th, td {
-      border: 1px solid #ccc;
-      padding: 8px;
-      text-align: left;
-      cursor: default;
-    }
-    th {
-      background-color: #eaeaea;
-      user-select: none;
-    }
-    th.sortable { cursor: pointer; }
-    tr:nth-child(even) { background: #f3f3f3; }
-    .info {
-      background: white;
-      padding: 10px;
-      border-radius: 6px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      margin-bottom: 10px;
-    }
-    select {
-      margin-top: 10px;
-      padding: 6px;
-      border-radius: 5px;
-      border: 1px solid #aaa;
-      font-size: 14px;
-    }
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f8f8f8; color: #222; }
+    h1, h2 { color: #333; margin: 0 0 6px 0; }
+    .controls { margin: 10px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .info { background: white; padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 10px; }
+    select { padding:6px; border-radius:5px; border:1px solid #aaa; font-size:14px; }
+    button { padding:7px 10px; border-radius:6px; border:1px solid #999; background:#fff; cursor:pointer; }
+    button:hover { filter:brightness(.98); }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; background: white; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; cursor: default; }
+    th { background-color: #eaeaea; user-select: none; }
+    th.sortable { cursor:pointer; }
+    tr.team-row:nth-child(even) { background: #f3f3f3; }
     .sortable:hover { background: #dcdcdc; }
     .asc::after { content: " ▲"; }
     .desc::after { content: " ▼"; }
-    .error {
-      color: darkred;
-      background: #ffeeee;
-      padding: 10px;
-      border-radius: 5px;
-      border: 1px solid #dd9999;
-    }
-    .highlight-team {
-      background-color: #e4c1f9 !important;
+    .error { color: darkred; background: #ffeeee; padding: 10px; border-radius: 5px; border: 1px solid #dd9999; }
+    .highlight-team { background-color: #e4c1f9 !important; }
+    .driver-row { background: #fcfcfc; }
+    .driver-table { width: 96%; margin: 8px auto 12px auto; border-collapse:collapse; }
+    .driver-table th, .driver-table td { border:1px solid #ddd; padding:6px; font-size:13px; }
+    .toggle-button { cursor: pointer; }
+    @media (max-width:900px) {
+      .driver-table td, .driver-table th { font-size:12px; padding:4px; }
     }
   </style>
 </head>
@@ -62,188 +34,418 @@
   <h1 id="race-title">Loading Results...</h1>
   <div class="info" id="race-info"></div>
 
-  <label for="classFilter"><strong>Filter by class:</strong></label>
-  <select id="classFilter">
-    <option value="all">All Classes</option>
-  </select>
+  <div class="controls">
+    <label for="classFilter"><strong>Filter by class:</strong></label>
+    <select id="classFilter"><option value="all">All Classes</option></select>
 
-  <table id="results-table">
+    <button id="resetBtn" title="Reset filters, sorting and folds">Reset</button>
+  </div>
+
+  <table id="results-table" aria-describedby="race-info">
     <thead>
       <tr>
-        <th class="sortable">Pos</th>
-        <th class="sortable">Team</th>
-        <th class="sortable">Drivers</th>
+        <th class="sortable" data-key="pos">Pos</th>
+        <th class="sortable" data-key="team">Team</th>
+        <th class="sortable" data-key="drivers">Drivers</th>
         <th>Car</th>
-        <th class="sortable">Best Lap</th>
-        <th class="sortable">Laps</th>
-        <th class="sortable">Incidents</th>
+        <th class="sortable" data-key="best">Best Lap</th>
+        <th class="sortable" data-key="laps">Laps</th>
+        <th class="sortable" data-key="inc">Incidents</th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
 
-  <script>
-    let allResults = [];
-    let selectedClass = "all";
-    const teamName = "Krosse Krabbe Racing"; // 👈 Change this if your team name differs
+<script>
+/* ------------------- CONFIG ------------------- */
+const teamName = "Krosse Krabbe Racing"; // highlight this team (case-insensitive, exact or partial if use partial matching)
+const usePartialTeamMatch = true;        // set true to highlight if teamName appears anywhere in display_name
+/* ------------------------------------------------ */
 
-    function getQueryParam(param) {
-      const urlParams = new URLSearchParams(window.location.search);
-      return urlParams.get(param);
+let allResults = [];      // array of team objects from selected session
+let originalAllResults = []; // keep original for full reset
+let selectedClass = "all";
+let currentSort = { key: null, dir: null }; // {key: 'pos'|'team'|'best'|'laps'|'inc'|'drivers', dir: 'asc'|'desc'}
+let jsonDataGlobal = null; // full json.data for header fields
+
+function getQueryParam(param) {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get(param);
+}
+
+function msValueToSeconds(value) {
+  // According to your note: "milliseconds by 4 decimals" -> value / 10000 = seconds
+  if (value === null || value === undefined || value <= 0) return null;
+  return value / 10000;
+}
+
+function formatTimeFromValue(value) {
+  // value is numeric as provided in JSON (we convert using msValueToSeconds)
+  const secs = msValueToSeconds(value);
+  if (secs === null) return "-";
+  const minutes = Math.floor(secs / 60);
+  const seconds = Math.floor(secs % 60);
+  const millis = Math.round((secs - Math.floor(secs)) * 1000);
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+function safeGet(obj, ...keys) {
+  for (const k of keys) {
+    if (obj && (k in obj) && obj[k] !== undefined && obj[k] !== null) return obj[k];
+  }
+  return null;
+}
+
+async function loadResults() {
+  const file = getQueryParam("file");
+  if (!file) {
+    document.body.innerHTML = `
+      <div class="error">
+        ⚠️ No JSON file specified.<br>
+        Usage example:<br>
+        <code>?file=eventresult-80288262.json</code>
+      </div>`;
+    return;
+  }
+
+  try {
+    const resp = await fetch(file);
+    if (!resp.ok) throw new Error("File not found: " + file);
+    const json = await resp.json();
+    const data = json.data;
+    jsonDataGlobal = data;
+
+    // Header info: SOF, Lead changes, Split X/Y
+    const sof = safeGet(data, "event_strength_of_field") ?? "—";
+    const leadChanges = safeGet(data, "num_lead_changes") ?? "—";
+
+    let splitText = "";
+    const subs = data.associated_subsession_ids || [];
+    const cur = data.subsession_id;
+    if (Array.isArray(subs) && subs.length > 0) {
+      const total = subs.length;
+      const idx = subs.indexOf(cur);
+      const splitNum = idx >= 0 ? idx + 1 : 1;
+      splitText = `Split ${splitNum}/${total}`;
     }
 
-    async function loadResults() {
-      const file = getQueryParam("file");
-      if (!file) {
-        document.body.innerHTML = `
-          <div class="error">
-            ⚠️ No JSON file specified.<br>
-            Usage example:<br>
-            <code>?file=eventresult-80288262.json</code>
-          </div>`;
-        return;
-      }
+    document.getElementById("race-title").innerText = data.season_name || (data.series_name || "iRacing Results");
+    document.getElementById("race-info").innerHTML = `
+      <strong>Series:</strong> ${data.series_name || "—"}<br>
+      <strong>Date:</strong> ${new Date(data.end_time).toLocaleString()}<br>
+      <strong>Car Classes:</strong> ${data.car_classes?.map(c=>c.name).join(", ") || "—"}<br>
+      <strong>Total Drivers:</strong> ${data.num_drivers ?? "—"}<br>
+      <strong>Strength of Field:</strong> ${sof}<br>
+      <strong>Lead Changes:</strong> ${leadChanges}${ splitText ? "<br><strong>" + splitText + "</strong>" : "" }
+    `;
 
-      try {
-        const response = await fetch(file);
-        if (!response.ok) throw new Error(`File not found: ${file}`);
-        const json = await response.json();
-        const data = json.data;
+    // pick session: Race > Quali > Practice
+    const sessions = data.session_results || [];
+    let session = sessions.find(s => s.simsession_type_name?.toLowerCase().includes("race"))
+               || sessions.find(s => s.simsession_type_name?.toLowerCase().includes("qual"))
+               || sessions.find(s => s.simsession_type_name?.toLowerCase().includes("prac"))
+               || sessions[0];
 
-        // --- Header info ---
-        const sof = data.event_strength_of_field || "—";
-        const leadChanges = data.num_lead_changes ?? "—";
+    if (!session) {
+      document.getElementById("race-info").innerHTML += "<br><em>No valid session found in this file.</em>";
+      return;
+    }
 
-        document.getElementById("race-title").innerText = data.season_name;
-        document.getElementById("race-info").innerHTML = `
-          <strong>Series:</strong> ${data.series_name}<br>
-          <strong>Date:</strong> ${new Date(data.end_time).toLocaleString()}<br>
-          <strong>Car Classes:</strong> ${data.car_classes.map(c => c.name).join(", ")}<br>
-          <strong>Total Drivers:</strong> ${data.num_drivers}<br>
-          <strong>Strength of Field:</strong> ${sof}<br>
-          <strong>Lead Changes:</strong> ${leadChanges}
-        `;
+    const subtitle = document.createElement("h2");
+    subtitle.textContent = session.simsession_name || "Session Results";
+    document.body.insertBefore(subtitle, document.querySelector("#results-table"));
 
-        // --- Pick session ---
-        const sessions = data.session_results || [];
-        let session =
-          sessions.find(s => s.simsession_type_name?.toLowerCase().includes("race")) ||
-          sessions.find(s => s.simsession_type_name?.toLowerCase().includes("qual")) ||
-          sessions.find(s => s.simsession_type_name?.toLowerCase().includes("prac"));
-
-        if (!session) {
-          document.getElementById("race-info").innerHTML +=
-            "<br><em>No valid session found in this file.</em>";
-          return;
+    allResults = (session.results || []).map(team => {
+      // augment each team with numeric attributes for sorting
+      const overallPos = (team.finish_position !== undefined && team.finish_position !== null) ? team.finish_position : (team.position ?? null);
+      const classPos = team.finish_position_in_class ?? null;
+      const bestVal = (team.best_lap_time && team.best_lap_time > 0) ? team.best_lap_time : null;
+      const avgVal = (team.average_lap && team.average_lap > 0) ? team.average_lap : null;
+      return Object.assign({}, team, {
+        __numeric: {
+          pos_overall: overallPos,
+          pos_class: classPos,
+          best: bestVal,
+          laps: team.laps_complete ?? 0,
+          inc: team.incidents ?? 0,
+          avg: avgVal
         }
-
-        // --- Subtitle ---
-        const subtitle = document.createElement("h2");
-        subtitle.textContent = session.simsession_name || "Session Results";
-        document.body.insertBefore(subtitle, document.querySelector("#results-table"));
-
-        // --- Store all results ---
-        allResults = session.results || [];
-
-        // --- Class dropdown ---
-        const classes = [...new Set(allResults.map(r => r.car_class_name))].sort();
-        const select = document.getElementById("classFilter");
-        classes.forEach(c => {
-          const opt = document.createElement("option");
-          opt.value = c;
-          opt.textContent = c;
-          select.appendChild(opt);
-        });
-        select.addEventListener("change", e => {
-          selectedClass = e.target.value;
-          renderTable();
-        });
-
-        renderTable();
-        enableTableSorting();
-      } catch (err) {
-        document.body.innerHTML = `<div class="error">⚠️ ${err.message}</div>`;
-        console.error(err);
-      }
-    }
-
-    function formatBestLap(ms) {
-      if (!ms || ms <= 0) return "-";
-      const totalSeconds = ms / 1000;
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = Math.floor(totalSeconds % 60);
-      const millis = Math.floor((totalSeconds % 1) * 10000); // four digits
-      return `${minutes}:${seconds.toString().padStart(2, "0")}.${millis.toString().padStart(4, "0")}`;
-    }
-
-    function renderTable() {
-      const tbody = document.querySelector("#results-table tbody");
-      tbody.innerHTML = "";
-
-      let resultsToShow = allResults;
-      if (selectedClass !== "all") {
-        resultsToShow = allResults.filter(r => r.car_class_name === selectedClass);
-      }
-
-      resultsToShow.forEach(team => {
-        const drivers = team.driver_results?.map(d => d.display_name).join(", ") || "—";
-        const bestLap = formatBestLap(team.best_lap_time);
-        const row = document.createElement("tr");
-        if (team.display_name?.trim().toLowerCase() === teamName.toLowerCase()) {
-          row.classList.add("highlight-team");
-        }
-
-        row.innerHTML = `
-          <td>${team.finish_position + 1}</td>
-          <td>${team.display_name}</td>
-          <td>${drivers}</td>
-          <td>${team.car_class_name}</td>
-          <td>${bestLap}</td>
-          <td>${team.laps_complete}</td>
-          <td>${team.incidents}</td>
-        `;
-        tbody.appendChild(row);
       });
+    });
+
+    // keep a deep copy for reset (shallow copy OK since we won't mutate nested)
+    originalAllResults = JSON.parse(JSON.stringify(allResults));
+
+    populateClassFilter();
+    renderTable();
+    enableTableSorting();
+    setupResetButton();
+
+  } catch (err) {
+    document.body.innerHTML = `<div class="error">⚠️ ${err.message}</div>`;
+    console.error(err);
+  }
+}
+
+function populateClassFilter() {
+  const select = document.getElementById("classFilter");
+  // clear extras except first
+  select.querySelectorAll("option:not([value='all'])").forEach(o => o.remove());
+
+  const classes = [...new Set(allResults.map(r => r.car_class_name).filter(Boolean))].sort();
+  classes.forEach(c => {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    select.appendChild(opt);
+  });
+
+  select.value = "all";
+  select.addEventListener("change", (e) => {
+    selectedClass = e.target.value;
+    // when switching class, reset sorting arrows but keep currentSort null (so user can sort again)
+    clearSortIndicators();
+    currentSort = { key: null, dir: null };
+    renderTable();
+  });
+}
+
+function renderTable() {
+  const tbody = document.querySelector("#results-table tbody");
+  tbody.innerHTML = "";
+
+  let toShow = allResults.slice();
+
+  if (selectedClass !== "all") {
+    toShow = toShow.filter(t => t.car_class_name === selectedClass);
+  }
+
+  // if currentSort is set, apply it
+  if (currentSort.key) {
+    toShow.sort((a,b) => compareForSort(a, b, currentSort.key, currentSort.dir));
+  }
+
+  toShow.forEach((team, idx) => {
+    const driversStr = (team.driver_results || []).map(d => d.display_name).join(", ") || "—";
+    const bestFormatted = team.__numeric.best ? formatTimeFromValue(team.__numeric.best) : "-";
+
+    // team row
+    const tr = document.createElement("tr");
+    tr.classList.add("team-row");
+    tr.setAttribute("data-pos-overall", team.__numeric.pos_overall ?? "");
+    tr.setAttribute("data-pos-class", team.__numeric.pos_class ?? "");
+    tr.setAttribute("data-best", team.__numeric.best ?? "");
+    tr.setAttribute("data-laps", team.__numeric.laps ?? 0);
+    tr.setAttribute("data-inc", team.__numeric.inc ?? 0);
+    tr.setAttribute("data-avg", team.__numeric.avg ?? "");
+
+    // highlight teamName
+    const teamDisplayLower = (team.display_name || "").toLowerCase();
+    const targetLower = (teamName || "").toLowerCase();
+    const isMatch = usePartialTeamMatch ? teamDisplayLower.includes(targetLower) : (teamDisplayLower === targetLower);
+    if (isMatch) tr.classList.add("highlight-team");
+
+    tr.innerHTML = `
+      <td class="toggle-button" style="width:70px">${(team.__numeric.pos_overall !== null && team.__numeric.pos_overall !== undefined) ? (team.__numeric.pos_overall + 1) : "-"}</td>
+      <td>${escapeHtml(team.display_name || "-")}</td>
+      <td>${escapeHtml(driversStr)}</td>
+      <td>${escapeHtml(team.car_class_name || team.car_name || "-")}</td>
+      <td>${bestFormatted}</td>
+      <td>${team.laps_complete ?? 0}</td>
+      <td>${team.incidents ?? 0}</td>
+    `;
+
+    // click to toggle an expand / collapse driver block
+    tr.addEventListener("click", (ev) => {
+      // ignore clicks if user clicked a header sortable (not relevant here)
+      // toggle driver block
+      const next = tr.nextElementSibling;
+      if (next && next.classList.contains("driver-row")) {
+        // currently expanded -> remove
+        next.remove();
+      } else {
+        // create driver sub-row
+        const dr = document.createElement("tr");
+        dr.classList.add("driver-row");
+        const td = document.createElement("td");
+        td.colSpan = 7;
+        td.style.padding = "10px 12px";
+        td.innerHTML = buildDriverTable(team);
+        dr.appendChild(td);
+        // insert after team row
+        tr.parentNode.insertBefore(dr, tr.nextSibling);
+      }
+    });
+
+    tbody.appendChild(tr);
+    // folded by default (no driver rows inserted)
+  });
+
+  // reapply header arrows if any
+  applySortIndicatorToHeader();
+}
+
+function buildDriverTable(team) {
+  // columns: Name, Club, License, Rating, Team Laps, Laps Led, Avg Lap, Fastest Lap, Fast Lap Nr, Laps Comp, Inc, Champ Pts, Div
+  const drivers = team.driver_results || [];
+  const teamLaps = team.laps_complete ?? "-";
+  let html = `<table class="driver-table"><thead><tr>
+    <th>Name</th><th>Club</th><th>License</th><th>Rating</th><th>Team Laps</th><th>Laps Led</th>
+    <th>Avg Lap</th><th>Fastest Lap</th><th>Fast Lap Nr</th><th>Laps Comp</th><th>Inc</th><th>Champ Pts</th><th>Div</th>
+  </tr></thead><tbody>`;
+
+  drivers.forEach(d => {
+    const name = d.display_name || "-";
+    const club = d.club_name || d.flair_name || d.country_code || "-";
+    // license: try new_license_level, old, or license fields
+    const license = d.new_license_level ?? d.old_license_level ?? d.license ?? "-";
+    const rating = d.newi_rating ?? d.new_ttrating ?? d.oldi_rating ?? d.old_ttrating ?? "-";
+
+    const lapsLed = d.laps_lead ?? 0;
+    const avgLap = d.average_lap ? formatTimeFromValue(d.average_lap) : "-";
+    const fastest = d.best_lap_time ? formatTimeFromValue(d.best_lap_time) : "-";
+    const fastLapNr = d.best_lap_num ?? "-";
+    const lapsComp = d.laps_complete ?? 0;
+    const inc = d.incidents ?? 0;
+    const champPts = d.champ_points ?? d.aggregate_champ_points ?? 0;
+    const div = d.division_name || (d.division !== undefined && d.division !== null ? d.division : "-");
+
+    html += `<tr>
+      <td>${escapeHtml(name)}</td>
+      <td>${escapeHtml(club)}</td>
+      <td>${escapeHtml(String(license))}</td>
+      <td>${escapeHtml(String(rating))}</td>
+      <td>${escapeHtml(String(teamLaps))}</td>
+      <td>${escapeHtml(String(lapsLed))}</td>
+      <td>${escapeHtml(avgLap)}</td>
+      <td>${escapeHtml(fastest)}</td>
+      <td>${escapeHtml(String(fastLapNr))}</td>
+      <td>${escapeHtml(String(lapsComp))}</td>
+      <td>${escapeHtml(String(inc))}</td>
+      <td>${escapeHtml(String(champPts))}</td>
+      <td>${escapeHtml(String(div))}</td>
+    </tr>`;
+  });
+
+  html += `</tbody></table>`;
+  return html;
+}
+
+function enableTableSorting() {
+  const table = document.getElementById("results-table");
+  const headers = table.querySelectorAll("th.sortable");
+  headers.forEach(h => {
+    h.addEventListener("click", () => {
+      const key = h.getAttribute("data-key");
+      // determine new direction
+      const currently = h.classList.contains("asc") ? "asc" : h.classList.contains("desc") ? "desc" : null;
+      const newDir = currently === "asc" ? "desc" : "asc";
+
+      // reset other headers
+      clearSortIndicators();
+      h.classList.add(newDir);
+
+      // store current sort
+      currentSort = { key: key, dir: newDir };
+
+      // re-render table using sort
+      renderTable();
+    });
+  });
+}
+
+function clearSortIndicators() {
+  document.querySelectorAll("th.sortable").forEach(h => h.classList.remove("asc","desc"));
+}
+
+function applySortIndicatorToHeader() {
+  if (!currentSort.key) return;
+  const th = document.querySelector(`th.sortable[data-key="${currentSort.key}"]`);
+  if (th) {
+    th.classList.remove("asc","desc");
+    th.classList.add(currentSort.dir);
+  }
+}
+
+function compareForSort(a, b, key, dir) {
+  // returns negative if a<b for asc
+  const d = dir === "asc" ? 1 : -1;
+
+  if (key === "pos") {
+    // if class filter active, use pos_class, else pos_overall
+    if (selectedClass !== "all") {
+      const aa = a.__numeric.pos_class ?? 1e9;
+      const bb = b.__numeric.pos_class ?? 1e9;
+      return (aa - bb) * d;
+    } else {
+      const aa = (a.__numeric.pos_overall ?? 1e9);
+      const bb = (b.__numeric.pos_overall ?? 1e9);
+      return (aa - bb) * d;
     }
+  }
 
-    function enableTableSorting() {
-      const table = document.getElementById("results-table");
-      const headers = table.querySelectorAll("th.sortable");
+  if (key === "team") {
+    const aa = (a.display_name || "").toLowerCase();
+    const bb = (b.display_name || "").toLowerCase();
+    return aa.localeCompare(bb) * d;
+  }
 
-      headers.forEach((header, index) => {
-        header.addEventListener("click", () => {
-          const tbody = table.querySelector("tbody");
-          const rows = Array.from(tbody.querySelectorAll("tr"));
-          const isNumeric = index === 0 || index === 5 || index === 6;
-          const currentDir = header.classList.contains("asc") ? "asc" :
-                             header.classList.contains("desc") ? "desc" : null;
-          const newDir = currentDir === "asc" ? "desc" : "asc";
+  if (key === "drivers") {
+    const aa = ((a.driver_results || []).map(x=>x.display_name).join(",")).toLowerCase();
+    const bb = ((b.driver_results || []).map(x=>x.display_name).join(",")).toLowerCase();
+    return aa.localeCompare(bb) * d;
+  }
 
-          headers.forEach(h => h.classList.remove("asc", "desc"));
-          header.classList.add(newDir);
+  if (key === "best") {
+    const aa = a.__numeric.best ?? 1e12;
+    const bb = b.__numeric.best ?? 1e12;
+    return (aa - bb) * d;
+  }
 
-          rows.sort((a, b) => {
-            const valA = a.children[index].innerText.trim();
-            const valB = b.children[index].innerText.trim();
+  if (key === "laps") {
+    const aa = a.__numeric.laps ?? 0;
+    const bb = b.__numeric.laps ?? 0;
+    return (aa - bb) * d;
+  }
 
-            if (isNumeric) {
-              const numA = parseFloat(valA.replace(":", "")) || 0;
-              const numB = parseFloat(valB.replace(":", "")) || 0;
-              return newDir === "asc" ? numA - numB : numB - numA;
-            } else {
-              return newDir === "asc"
-                ? valA.localeCompare(valB)
-                : valB.localeCompare(valA);
-            }
-          });
+  if (key === "inc") {
+    const aa = a.__numeric.inc ?? 0;
+    const bb = b.__numeric.inc ?? 0;
+    return (aa - bb) * d;
+  }
 
-          tbody.innerHTML = "";
-          rows.forEach(r => tbody.appendChild(r));
-        });
-      });
-    }
+  // fallback: string compare of rendered team name
+  return ((a.display_name||"").toLowerCase().localeCompare((b.display_name||"").toLowerCase())) * d;
+}
 
-    loadResults();
-  </script>
+function setupResetButton() {
+  const btn = document.getElementById("resetBtn");
+  btn.addEventListener("click", () => {
+    // full reset: reset class filter to all, clear sorting, re-fold everything
+    selectedClass = "all";
+    document.getElementById("classFilter").value = "all";
+    currentSort = { key: null, dir: null };
+    clearSortIndicators();
+    // restore original results (in case we mutated)
+    allResults = JSON.parse(JSON.stringify(originalAllResults));
+    renderTable();
+    // scroll to top
+    window.scrollTo({top:0, behavior:"smooth"});
+  });
+}
+
+function escapeHtml(text) {
+  if (text === null || text === undefined) return "";
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// initial load
+loadResults();
+</script>
 </body>
 </html>
