@@ -54,92 +54,367 @@
   </table>
 
 <script>
+/* ---------- Config / State ---------- */
 const teamName="Krosse Krabbe Racing";
 const usePartialTeamMatch=true;
-let allResults=[],originalAllResults=[],selectedClass="all",currentSort={key:null,dir:null},jsonDataGlobal=null,classFastestMap={};
+let allResults=[], originalAllResults=[], selectedClass="all", currentSort={key:null,dir:null}, jsonDataGlobal=null, classFastestMap={};
 
-function safeGet(o,...k){for(const x of k)if(o&&x in o&&o[x]!=null)return o[x];return null;}
-function countryToFlag(code){
-  if(!code)return"";if(code==="EN")return"🏴";
-  if(code.length===2){const A=0x1F1E6;return String.fromCodePoint(...[...code.toUpperCase()].map(c=>A+c.charCodeAt(0)-65));}
-  return"";
-}
-function getDriverCountry(d){const cc=safeGet(d,"country_code");if(cc&&cc.length===2)return cc.toUpperCase();const fl=safeGet(d,"flair_shortname");if(fl&&fl.length===3)return fl.substring(0,2).toUpperCase();return"";}
-function msValueToSeconds(v){return v>0?v/10000:null;}
-function formatTime(v){const s=msValueToSeconds(v);if(!s)return"-";const m=Math.floor(s/60),sec=Math.floor(s%60),ms=Math.round((s%1)*1000);return`${m}:${String(sec).padStart(2,"0")}.${String(ms).padStart(3,"0")}`;}
-function pad2(n){return String(n).padStart(2,"0");}
-function formatDate(start,end){const s=new Date(start),e=new Date(end);return`<strong>Date:</strong> ${pad2(s.getDate())}/${pad2(s.getMonth()+1)}/${s.getFullYear()}, Start: ${pad2(s.getHours())}:${pad2(s.getMinutes())}, Finish: ${pad2(e.getHours())}:${pad2(e.getMinutes())}`;}
+/* ---------- Helpers ---------- */
+function safeGet(o,...k){ for(const x of k) if(o && x in o && o[x] != null) return o[x]; return null; }
+function countryToFlag(code){ if(!code) return ""; if(code==="EN") return "🏴"; if(code.length===2){ const A=0x1F1E6; return String.fromCodePoint(...[...code.toUpperCase()].map(c=>A+c.charCodeAt(0)-65)); } return ""; }
+function getDriverCountry(d){ const cc=safeGet(d,"country_code"); if(cc&&cc.length===2) return cc.toUpperCase(); const f=safeGet(d,"flair_shortname"); if(f&&f.length===3) return f.substring(0,2).toUpperCase(); return ""; }
+function msValueToSeconds(v){ return (v != null && v > 0) ? v/10000 : null; }
+function formatTimeFromValue(v){ const s = msValueToSeconds(v); if(!s) return "-"; const m=Math.floor(s/60); const sec=Math.floor(s%60); const ms=Math.round((s%1)*1000); return `${m}:${String(sec).padStart(2,"0")}.${String(ms).padStart(3,"0")}`; }
+function pad2(n){ return String(n).padStart(2,"0"); }
+function formatDateLabel(start, end){ const s=new Date(start), e=new Date(end); return `<strong>Date:</strong> ${pad2(s.getDate())}/${pad2(s.getMonth()+1)}/${s.getFullYear()}, Start: ${pad2(s.getHours())}:${pad2(s.getMinutes())}, Finish: ${pad2(e.getHours())}:${pad2(e.getMinutes())}`; }
 
+/* ---------- Load + build ---------- */
 async function loadResults(){
-  const file=new URLSearchParams(window.location.search).get("file");
-  if(!file){document.body.innerHTML="<div class='error'>⚠️ No JSON file specified.</div>";return;}
-  const r=await fetch(file);if(!r.ok)throw new Error("File not found");const j=await r.json();const d=j.data;jsonDataGlobal=d;
-  const trackObj=safeGet(d,"track")||{},trackName=trackObj.track_name||trackObj.name||"-",layout=trackObj.config_name||trackObj.layout_name||"";
-  const sof=safeGet(d,"event_strength_of_field")??"—",lead=safeGet(d,"num_lead_changes")??"—";
-  const sessions=d.session_results||[];let s=sessions.find(x=>x.simsession_type_name?.toLowerCase().includes("race"))||sessions[0];
-  const subs=d.associated_subsession_ids||[],cur=d.subsession_id;let splitHtml="";if(subs.length){const t=subs.length,i=subs.indexOf(cur);splitHtml=`<br><strong>Split:</strong> ${i>=0?i+1:1}/${t}`;}
-  const start=safeGet(d,"start_time","session_start_time"),end=safeGet(d,"end_time","session_end_time");
-  document.getElementById("race-title").innerText=d.season_name||d.series_name||"iRacing Results";
-  document.getElementById("race-info").innerHTML=
-  `<strong>Series:</strong> ${d.series_name||"—"}<br>
-   <strong>Track:</strong> ${trackName}${layout?" — "+layout:""}<br>
-   ${formatDate(start,end)}<br>
-   <strong>Car Classes:</strong> ${(d.car_classes||[]).map(c=>c.name).join(", ")||"—"}<br>
-   <strong>Total Teams:</strong> ${(s.results||[]).length}<br>
-   <strong>Total Drivers:</strong> ${d.num_drivers??"—"}<br>
-   <strong>Strength of Field:</strong> ${sof}<br>
-   <strong>Lead Changes:</strong> ${lead}${splitHtml}`;
-  allResults=s.results.map(t=>({...t,__n:{pos:t.finish_position??t.position??null,posc:t.finish_position_in_class??null,best:t.best_lap_time>0?t.best_lap_time:null,laps:t.laps_complete??0,inc:t.incidents??0}}));
-  classFastestMap={};allResults.forEach(t=>{const c=t.car_class_name||"unknown";const b=t.__n.best;if(b&&(!(c in classFastestMap)||b<classFastestMap[c]))classFastestMap[c]=b;(t.driver_results||[]).forEach(dr=>{const db=dr.best_lap_time;if(db&&(!(c in classFastestMap)||db<classFastestMap[c]))classFastestMap[c]=db;});});
-  originalAllResults=JSON.parse(JSON.stringify(allResults));populateClassFilter();renderTable();enableSort();setupReset();
+  const file = new URLSearchParams(window.location.search).get("file");
+  if(!file){ document.body.innerHTML = "<div class='error'>⚠️ No JSON file specified.</div>"; return; }
+  const resp = await fetch(file);
+  if(!resp.ok) { document.body.innerHTML = "<div class='error'>⚠️ File not found</div>"; return; }
+  const json = await resp.json();
+  const data = json.data;
+  jsonDataGlobal = data;
+
+  // track / header
+  const trackObj = safeGet(data, "track") || {};
+  const trackName = safeGet(trackObj, "track_name", "name") || "-";
+  const layout = safeGet(trackObj, "config_name", "layout_name") || "";
+  const sof = safeGet(data, "event_strength_of_field") ?? "—";
+  const leadChanges = safeGet(data, "num_lead_changes") ?? "—";
+
+  // pick session
+  const sessions = data.session_results || [];
+  let session = sessions.find(s => s.simsession_type_name?.toLowerCase().includes("race")) || sessions[0] || { results: [] };
+
+  // split
+  const subs = data.associated_subsession_ids || [];
+  const cur = data.subsession_id;
+  let splitHtml = "";
+  if(Array.isArray(subs) && subs.length > 0) { const total = subs.length, idx = subs.indexOf(cur); splitHtml = `<br><strong>Split:</strong> ${idx >= 0 ? idx+1 : 1}/${total}`; }
+
+  const startTime = safeGet(data, "start_time", "session_start_time", "start_time_utc");
+  const endTime = safeGet(data, "end_time", "session_end_time", "finish_time_utc");
+  document.getElementById("race-title").innerText = safeGet(data, "season_name") || safeGet(data, "series_name") || "iRacing Results";
+  document.getElementById("race-info").innerHTML = `
+    <strong>Series:</strong> ${safeGet(data, "series_name") || "—"}<br>
+    <strong>Track:</strong> ${trackName}${ layout ? " — " + layout : "" }<br>
+    ${formatDateLabel(startTime, endTime)}<br>
+    <strong>Car Classes:</strong> ${(data.car_classes||[]).map(c=>c.name).join(", ") || "—"}<br>
+    <strong>Total Teams:</strong> ${(session.results||[]).length}<br>
+    <strong>Total Drivers:</strong> ${data.num_drivers ?? "—"}<br>
+    <strong>Strength of Field:</strong> ${sof}<br>
+    <strong>Lead Changes:</strong> ${leadChanges}${splitHtml}
+  `;
+
+  // build allResults with numeric helpers
+  allResults = (session.results || []).map(team => {
+    return {
+      ...team,
+      __numeric: {
+        pos_overall: (team.finish_position != null) ? team.finish_position : (team.position ?? null),
+        pos_class: (team.finish_position_in_class != null) ? team.finish_position_in_class : null,
+        best: (team.best_lap_time && team.best_lap_time > 0) ? Number(team.best_lap_time) : null,
+        avg: (team.average_lap && team.average_lap > 0) ? Number(team.average_lap) : null,
+        laps: team.laps_complete ?? 0,
+        inc: team.incidents ?? 0
+      }
+    };
+  });
+
+  // compute classFastestMap robustly (min positive numeric best per class)
+  classFastestMap = {};
+  allResults.forEach(team => {
+    const cls = team.car_class_name || "unknown";
+    const teamBest = Number(safeGet(team, "best_lap_time", "best_lap_time", team.__numeric && team.__numeric.best)) || 0;
+    if(teamBest > 0) {
+      if(!(cls in classFastestMap) || teamBest < classFastestMap[cls]) classFastestMap[cls] = teamBest;
+    }
+    (team.driver_results || []).forEach(d => {
+      const db = Number(safeGet(d, "best_lap_time")) || 0;
+      if(db > 0) {
+        if(!(cls in classFastestMap) || db < classFastestMap[cls]) classFastestMap[cls] = db;
+      }
+    });
+  });
+
+  originalAllResults = JSON.parse(JSON.stringify(allResults));
+  populateClassFilter();
+  renderTable();
+  enableTableSorting();
+  setupResetButton();
 }
 
+/* ---------- UI builders ---------- */
 function populateClassFilter(){
-  const sel=document.getElementById("classFilter");sel.querySelectorAll("option:not([value='all'])").forEach(o=>o.remove());
-  [...new Set(allResults.map(r=>r.car_class_name))].sort().forEach(c=>{const o=document.createElement("option");o.value=c;o.textContent=c;sel.appendChild(o);});
-  sel.onchange=e=>{selectedClass=e.target.value;currentSort={};renderTable();};
+  const sel = document.getElementById("classFilter");
+  sel.querySelectorAll("option:not([value='all'])").forEach(o => o.remove());
+  const classes = [...new Set(allResults.map(r => r.car_class_name).filter(Boolean))].sort();
+  classes.forEach(c => { const o = document.createElement("option"); o.value = c; o.textContent = c; sel.appendChild(o); });
+  sel.onchange = (e) => { selectedClass = e.target.value; currentSort = {key:null,dir:null}; renderTable(); };
 }
 
 function renderTable(){
-  const tb=document.querySelector("#results-table tbody");tb.innerHTML="";
-  const overallLeaderLaps=Math.max(...allResults.map(x=>x.laps_complete??0),0);
-  let view=selectedClass==="all"?allResults.slice():allResults.filter(x=>x.car_class_name===selectedClass);
-  const classLeaderLaps=Math.max(...view.map(x=>x.laps_complete??0),0);
-  const classOrder={};if(selectedClass!=="all"){view.slice().sort((a,b)=>(a.__n.posc??1e9)-(b.__n.posc??1e9)).forEach((t,i)=>classOrder[t.team_id]=i+1);}
-  if(currentSort.key)view.sort((a,b)=>compareSort(a,b,currentSort.key,currentSort.dir));
-  view.forEach(t=>{
-    const tr=document.createElement("tr");tr.classList.add("team-row");
-    const name=t.display_name||"-";const low=name.toLowerCase(),target=teamName.toLowerCase();
-    if(usePartialTeamMatch?low.includes(target):low===target)tr.classList.add("highlight-team");
-    let pos=selectedClass!=="all"?(classOrder[t.team_id]||t.__n.posc+1):(t.__n.pos??0)+1;
-    let posTxt=pos;if(pos===1)posTxt=`1 🥇`;else if(pos===2)posTxt=`2 🥈`;else if(pos===3)posTxt=`3 🥉`;
-    const best=formatTime(t.__n.best),cb=classFastestMap[t.car_class_name];const bestC=cb&&t.__n.best&&cb===t.__n.best?"fastest":"";
-    const start=t.starting_position??"-";
-    let lapsBehind=(selectedClass==="all"?overallLeaderLaps:classLeaderLaps)-(t.laps_complete??0);
-    const interval=lapsBehind===0?"-":`–${lapsBehind} Lap${lapsBehind>1?"s":""}`;
-    const dnf=(t.reason_out&&t.reason_out.toLowerCase()!=="running")||(t.reason_out_id&&t.reason_out_id!==0);
-    tr.innerHTML=`<td>${posTxt}</td><td>${name}${dnf?'<span class="dnf">DNF</span>':""}</td><td>${t.car_class_name||"-"}</td><td>${t.car_name||"-"}</td><td>${start}</td><td>${interval}</td><td class="${bestC}">${best}</td><td>${t.laps_complete??0}</td><td>${t.incidents??0}</td>`;
-    tr.onclick=()=>{const n=tr.nextElementSibling;if(n&&n.classList.contains("driver-row"))n.remove();else{const dr=document.createElement("tr");dr.classList.add("driver-row");const td=document.createElement("td");td.colSpan=9;td.innerHTML=buildDrivers(t);dr.appendChild(td);tr.after(dr);}};
-    tb.appendChild(tr);
+  const tbody = document.querySelector("#results-table tbody");
+  tbody.innerHTML = "";
+
+  // leader laps overall and per-class
+  const overallLeaderLaps = Math.max(...allResults.map(t => t.laps_complete ?? 0), 0);
+  let view = selectedClass === "all" ? allResults.slice() : allResults.filter(t => t.car_class_name === selectedClass);
+  const classLeaderLaps = Math.max(...view.map(t => t.laps_complete ?? 0), 0);
+
+  // class order for filtered view (1-based)
+  const classOrder = {};
+  if(selectedClass !== "all") {
+    view.slice().sort((a,b) => ( (a.__numeric.pos_class != null ? a.__numeric.pos_class : a.__numeric.pos_overall ?? 1e9) - (b.__numeric.pos_class != null ? b.__numeric.pos_class : b.__numeric.pos_overall ?? 1e9) ))
+      .forEach((t,i) => { classOrder[t.team_id] = i + 1; });
+  }
+
+  if(currentSort.key) view.sort((a,b) => compareForSort(a,b,currentSort.key,currentSort.dir));
+
+  view.forEach(team => {
+    const tr = document.createElement("tr"); tr.classList.add("team-row");
+    const teamLower = (team.display_name || "").toLowerCase();
+    const targetLower = (teamName || "").toLowerCase();
+    if(usePartialTeamMatch ? teamLower.includes(targetLower) : teamLower === targetLower) tr.classList.add("highlight-team");
+
+    // position shown
+    let posShown = "-";
+    if(selectedClass !== "all") {
+      if(team.team_id in classOrder) posShown = classOrder[team.team_id];
+      else if(team.__numeric.pos_class != null) posShown = team.__numeric.pos_class + 1;
+      else if(team.__numeric.pos_overall != null) posShown = team.__numeric.pos_overall + 1;
+    } else {
+      posShown = (team.__numeric.pos_overall != null) ? team.__numeric.pos_overall + 1 : "-";
+    }
+    let posHtml = posShown;
+    if(typeof posShown === "number") {
+      if(posShown === 1) posHtml = `1 🥇`;
+      else if(posShown === 2) posHtml = `2 🥈`;
+      else if(posShown === 3) posHtml = `3 🥉`;
+    }
+
+    // best lap: format; determine if this equals class fastest
+    const bestRaw = team.__numeric.best;
+    const bestStr = bestRaw ? formatTimeFromValue(bestRaw) : "-";
+    const clsBest = classFastestMap[team.car_class_name];
+    const bestClassCss = (clsBest && bestRaw && Number(clsBest) === Number(bestRaw)) ? "fastest" : "";
+
+    // starting pos display (use JSON as-is)
+    const startVal = safeGet(team, "starting_position");
+    const startDisplay = (startVal !== null && startVal !== undefined) ? startVal : "-";
+
+    // interval: when filtered by class, compare to class leader; else compare to overall leader
+    const lapsForTeam = team.laps_complete ?? 0;
+    const leaderLapsToUse = (selectedClass === "all") ? overallLeaderLaps : classLeaderLaps;
+    const lapDelta = leaderLapsToUse - lapsForTeam;
+    const interval = lapDelta === 0 ? "-" : `–${lapDelta} Lap${lapDelta > 1 ? "s" : ""}`;
+
+    // DNF
+    const reason = safeGet(team, "reason_out") || "";
+    const reasonId = safeGet(team, "reason_out_id");
+    const isDNF = (reason && reason.toLowerCase() !== "running") || (reasonId && reasonId !== 0);
+
+    tr.innerHTML = `
+      <td class="toggle-button">${posHtml}</td>
+      <td>${escapeHtml(team.display_name || "-")} ${isDNF ? '<span class="dnf">DNF</span>' : ''}</td>
+      <td>${escapeHtml(team.car_class_name || "-")}</td>
+      <td>${escapeHtml(team.car_name || "-")}</td>
+      <td>${escapeHtml(String(startDisplay))}</td>
+      <td>${escapeHtml(interval)}</td>
+      <td class="${bestClassCss}">${escapeHtml(bestStr)}</td>
+      <td>${team.laps_complete ?? 0}</td>
+      <td>${team.incidents ?? 0}</td>
+    `;
+
+    tr.addEventListener("click", () => {
+      const next = tr.nextElementSibling;
+      if(next && next.classList.contains("driver-row")) next.remove();
+      else {
+        const dr = document.createElement("tr"); dr.classList.add("driver-row");
+        const td = document.createElement("td"); td.colSpan = 9;
+        td.style.padding = "10px";
+        td.innerHTML = buildDriverTable(team);
+        dr.appendChild(td);
+        tr.parentNode.insertBefore(dr, tr.nextSibling);
+      }
+    });
+
+    tbody.appendChild(tr);
+  });
+
+  applySortIndicatorToHeader();
+}
+
+function buildDriverTable(team) {
+  const drivers = team.driver_results || [];
+  const classBest = classFastestMap[team.car_class_name];
+  let html = `<table class="driver-table"><thead><tr>
+    <th>Name</th><th>Country</th><th>License</th><th>Rating</th><th>Laps</th><th>Laps Led</th>
+    <th>Avg Lap</th><th>Fastest Lap</th><th>Fast Lap Nr</th><th>Inc</th><th>Champ Pts</th><th>Div</th>
+  </tr></thead><tbody>`;
+  drivers.forEach(d => {
+    const name = d.display_name || "-";
+    const cc = getDriverCountry(d);
+    const flag = countryToFlag(cc);
+    const oldSub = safeGet(d, "old_sub_level");
+    const newSub = safeGet(d, "new_sub_level");
+    let safetyStr = "-";
+    if(oldSub != null) {
+      const prior = oldSub / 100;
+      const delta = (newSub != null) ? ((newSub - oldSub) / 100) : 0;
+      const sign = delta > 0 ? `+${delta.toFixed(1)}` : delta < 0 ? `${delta.toFixed(1)}` : `+0.0`;
+      safetyStr = `${getLicenseLetterForDriver(d)} ${prior.toFixed(1)} ${sign}`;
+    } else if(newSub != null) {
+      safetyStr = `${getLicenseLetterForDriver(d)} ${(newSub/100).toFixed(1)} +0.0`;
+    } else {
+      safetyStr = getLicenseLetterForDriver(d) || "-";
+    }
+
+    const oldIr = safeGet(d, "oldi_rating");
+    const newIr = safeGet(d, "newi_rating");
+    let irStr = "-";
+    if(oldIr != null) {
+      const delta = (newIr != null) ? (newIr - oldIr) : 0;
+      const sign = delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : `+0`;
+      irStr = `${oldIr} ${sign}`;
+    } else if(newIr != null) {
+      irStr = `${newIr} +0`;
+    }
+
+    const laps = d.laps_complete ?? 0;
+    const lapsLed = d.laps_lead ?? 0;
+    const avgLap = d.average_lap ? formatTimeFromValue(d.average_lap) : "-";
+    const fastestRaw = safeGet(d, "best_lap_time");
+    const fastest = fastestRaw ? formatTimeFromValue(fastestRaw) : "-";
+    const fastNr = d.best_lap_num ?? "-";
+    const inc = d.incidents ?? 0;
+    const champPts = d.champ_points ?? d.aggregate_champ_points ?? 0;
+    const div = d.division_name || (d.division != null ? d.division : "-");
+
+    const fastestClassCss = (classBest != null && fastestRaw != null && Number(classBest) === Number(fastestRaw)) ? "fastest" : "";
+
+    html += `<tr>
+      <td>${escapeHtml(name)}</td>
+      <td>${flag}</td>
+      <td>${escapeHtml(safetyStr)}</td>
+      <td>${escapeHtml(irStr)}</td>
+      <td>${escapeHtml(String(laps))}</td>
+      <td>${escapeHtml(String(lapsLed))}</td>
+      <td>${escapeHtml(avgLap)}</td>
+      <td class="${fastestClassCss}">${escapeHtml(fastest)}</td>
+      <td>${escapeHtml(String(fastNr))}</td>
+      <td>${escapeHtml(String(inc))}</td>
+      <td>${escapeHtml(String(champPts))}</td>
+      <td>${escapeHtml(String(div))}</td>
+    </tr>`;
+  });
+  html += "</tbody></table>";
+  return html;
+}
+
+/* ---------- License mapping ---------- */
+function getLicenseLetterForDriver(d) {
+  const lvl = safeGet(d, "old_license_level", "new_license_level");
+  if(lvl == null) return "-";
+  const allowed = jsonDataGlobal?.allowed_licenses;
+  if(Array.isArray(allowed)) {
+    for(const a of allowed) {
+      const minL = a.min_license_level, maxL = a.max_license_level;
+      if(minL != null && maxL != null && lvl >= minL && lvl <= maxL) {
+        const name = a.group_name || "";
+        const m = name.match(/Class\s+([A-Z])/i);
+        if(m) return m[1].toUpperCase();
+        return name;
+      }
+    }
+  }
+  if(lvl <= 8) return "D";
+  if(lvl <= 12) return "C";
+  if(lvl <= 16) return "B";
+  if(lvl <= 20) return "A";
+  if(lvl <= 24) return "Pro";
+  return "Pro/WC";
+}
+
+/* ---------- Sorting ---------- */
+function enableTableSorting() {
+  document.querySelectorAll("th.sortable").forEach(h => {
+    h.addEventListener("click", () => {
+      const key = h.dataset.key;
+      const currently = h.classList.contains("asc") ? "asc" : h.classList.contains("desc") ? "desc" : null;
+      const newDir = (currently === "asc") ? "desc" : "asc";
+      clearSortIndicators();
+      h.classList.add(newDir);
+      currentSort = { key: key, dir: newDir };
+      renderTable();
+    });
+  });
+}
+function clearSortIndicators() { document.querySelectorAll("th.sortable").forEach(h => h.classList.remove("asc","desc")); }
+function applySortIndicatorToHeader() { if(!currentSort.key) return; const th = document.querySelector(`th.sortable[data-key="${currentSort.key}"]`); if(th) { th.classList.remove("asc","desc"); th.classList.add(currentSort.dir); } }
+function compareForSort(a,b,key,dir){
+  const mul = dir === "asc" ? 1 : -1;
+  if(key === "pos") {
+    if(selectedClass !== "all") {
+      const aa = (a.__numeric.pos_class != null) ? a.__numeric.pos_class : (a.__numeric.pos_overall != null ? a.__numeric.pos_overall : 1e9);
+      const bb = (b.__numeric.pos_class != null) ? b.__numeric.pos_class : (b.__numeric.pos_overall != null ? b.__numeric.pos_overall : 1e9);
+      return (aa - bb) * mul;
+    } else {
+      const aa = (a.__numeric.pos_overall != null) ? a.__numeric.pos_overall : 1e9;
+      const bb = (b.__numeric.pos_overall != null) ? b.__numeric.pos_overall : 1e9;
+      return (aa - bb) * mul;
+    }
+  }
+  if(key === "team") return (a.display_name || "").toLowerCase().localeCompare((b.display_name || "").toLowerCase()) * mul;
+  if(key === "start") {
+    const aa = (a.starting_position != null) ? a.starting_position : 1e9;
+    const bb = (b.starting_position != null) ? b.starting_position : 1e9;
+    return (aa - bb) * mul;
+  }
+  if(key === "interval") {
+    const aa = (a.laps_complete != null) ? a.laps_complete : 0;
+    const bb = (b.laps_complete != null) ? b.laps_complete : 0;
+    return (aa - bb) * -1 * mul;
+  }
+  if(key === "best") {
+    const aa = a.__numeric.best != null ? a.__numeric.best : 1e12;
+    const bb = b.__numeric.best != null ? b.__numeric.best : 1e12;
+    return (aa - bb) * mul;
+  }
+  if(key === "laps") {
+    const aa = a.laps_complete != null ? a.laps_complete : 0;
+    const bb = b.laps_complete != null ? b.laps_complete : 0;
+    return (aa - bb) * -1 * mul;
+  }
+  if(key === "inc") {
+    const aa = a.incidents != null ? a.incidents : 0;
+    const bb = b.incidents != null ? b.incidents : 0;
+    return (aa - bb) * mul;
+  }
+  return 0;
+}
+
+/* ---------- Reset ---------- */
+function setupResetButton(){
+  document.getElementById("resetBtn").addEventListener("click", () => {
+    selectedClass = "all";
+    document.getElementById("classFilter").value = "all";
+    currentSort = { key: null, dir: null };
+    clearSortIndicators();
+    document.querySelectorAll(".driver-row").forEach(r => r.remove());
+    allResults = JSON.parse(JSON.stringify(originalAllResults));
+    renderTable();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
 }
 
-function buildDrivers(t){
-  const d=t.driver_results||[],cb=classFastestMap[t.car_class_name];
-  let h=`<table class="driver-table"><thead><tr><th>Name</th><th>Country</th><th>License</th><th>Rating</th><th>Laps</th><th>Laps Led</th><th>Avg Lap</th><th>Fastest Lap</th><th>Fast Lap Nr</th><th>Inc</th><th>Champ Pts</th><th>Div</th></tr></thead><tbody>`;
-  d.forEach(x=>{
-    const country=getDriverCountry(x);const flag=countryToFlag(country);
-    const L=getLicenseLetter(x),os=x.old_sub_level,ns=x.new_sub_level;let lic="-";if(os!=null){const p=os/100,Δ=(ns!=null?(ns-os)/100:0);const s=Δ>0?`+${Δ.toFixed(1)}`:Δ.toFixed(1);lic=`${L} ${p.toFixed(1)} ${s}`;}
-    const oi=x.oldi_rating,ni=x.newi_rating;let ir="-";if(oi!=null){const Δ=(ni!=null?ni-oi:0);const s=Δ>0?`+${Δ}`:Δ.toString();ir=`${oi} ${s}`;}
-    const avg=x.average_lap?formatTime(x.average_lap):"-",f=x.best_lap_time?formatTime(x.best_lap_time):"-",fn=x.best_lap_num??"-";
-    const fast=(cb&&x.best_lap_time&&cb===x.best_lap_time)?"fastest":"";h+=`<tr><td>${x.display_name||"-"}</td><td>${flag}</td><td>${lic}</td><td>${ir}</td><td>${x.laps_complete??0}</td><td>${x.laps_lead??0}</td><td>${avg}</td><td class="${fast}">${f}</td><td>${fn}</td><td>${x.incidents??0}</td><td>${x.champ_points??0}</td><td>${x.division_name||x.division||"-"}</td></tr>`;
-  });return h+"</tbody></table>";
-}
+/* ---------- util ---------- */
+function escapeHtml(s){ if(s == null) return ""; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;'); }
 
-function getLicenseLetter(d){const l=d.old_license_level??d.new_license_level;if(l==null)return"-";if(l<=8)return"D";if(l<=12)return"C";if(l<=16)return"B";if(l<=20)return"A";if(l<=24)return"Pro";return"Pro/WC";}
-function enableSort(){document.querySelectorAll("th.sortable").forEach(h=>h.onclick=()=>{const k=h.dataset.key,d=h.classList.contains("asc")?"desc":"asc";document.querySelectorAll("th.sortable").forEach(x=>x.classList.remove("asc","desc"));h.classList.add(d);currentSort={key:k,dir:d};renderTable();});}
-function compareSort(a,b,k,d){const m=d==="asc"?1:-1;if(k==="pos")return((a.__n.pos??1e9)-(b.__n.pos??1e9))*m;if(k==="team")return(a.display_name||"").localeCompare(b.display_name||"")*m;if(k==="start")return((a.starting_position??1e9)-(b.starting_position??1e9))*m;if(k==="interval")return((a.laps_complete??0)-(b.laps_complete??0))*-m;if(k==="best")return((a.__n.best??1e12)-(b.__n.best??1e12))*m;if(k==="laps")return((a.laps_complete??0)-(b.laps_complete??0))*-m;if(k==="inc")return((a.incidents??0)-(b.incidents??0))*m;return 0;}
-function setupReset(){document.getElementById("resetBtn").onclick=()=>{selectedClass="all";document.getElementById("classFilter").value="all";currentSort={};document.querySelectorAll(".driver-row").forEach(r=>r.remove());renderTable();};}
+/* ---------- start ---------- */
 loadResults();
 </script>
 </body>
