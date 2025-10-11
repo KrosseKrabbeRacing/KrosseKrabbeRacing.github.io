@@ -5,14 +5,15 @@
   <title>iRacing Results Viewer</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #f8f8f8; color: #222; }
-    h1, h2 { color: #333; margin: 0 0 6px 0; }
+    h1 { color: #333; margin: 0 0 6px 0; }
+    h2 { color: #333; margin: 6px 0 0 0; font-weight: 600; font-size: 1.05rem; }
     .controls { margin: 10px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .info { background: white; padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 10px; }
     select { padding:6px; border-radius:5px; border:1px solid #aaa; font-size:14px; }
     button { padding:7px 10px; border-radius:6px; border:1px solid #999; background:#fff; cursor:pointer; }
     button:hover { filter:brightness(.98); }
     table { border-collapse: collapse; width: 100%; margin-top: 10px; background: white; }
-    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; cursor: default; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; cursor: default; vertical-align: middle; }
     th { background-color: #eaeaea; user-select: none; }
     th.sortable { cursor:pointer; }
     tr.team-row:nth-child(even) { background: #f3f3f3; }
@@ -23,8 +24,10 @@
     .highlight-team { background-color: #e4c1f9 !important; }
     .driver-row { background: #fcfcfc; }
     .driver-table { width: 96%; margin: 8px auto 12px auto; border-collapse:collapse; }
-    .driver-table th, .driver-table td { border:1px solid #ddd; padding:6px; font-size:13px; }
+    .driver-table th, .driver-table td { border:1px solid #ddd; padding:6px; font-size:13px; text-align:left; }
     .toggle-button { cursor: pointer; }
+    .flag { font-size: 1.05em; margin-right:6px; vertical-align:middle; }
+    .fastest { color: #800080; font-weight: 600; }
     @media (max-width:900px) {
       .driver-table td, .driver-table th { font-size:12px; padding:4px; }
     }
@@ -46,7 +49,8 @@
       <tr>
         <th class="sortable" data-key="pos">Pos</th>
         <th class="sortable" data-key="team">Team</th>
-        <th class="sortable" data-key="drivers">Drivers</th>
+        <th class="sortable" data-key="drivers" title="Click to sort by driver names (expands remain folded)">Drivers</th>
+        <th>Class</th>
         <th>Car</th>
         <th class="sortable" data-key="best">Best Lap</th>
         <th class="sortable" data-key="laps">Laps</th>
@@ -58,42 +62,54 @@
 
 <script>
 /* ------------------- CONFIG ------------------- */
-const teamName = "Krosse Krabbe Racing"; // highlight this team (case-insensitive, exact or partial if use partial matching)
-const usePartialTeamMatch = true;        // set true to highlight if teamName appears anywhere in display_name
+const teamName = "Krosse Krabbe Racing"; // highlight this team (case-insensitive)
+const usePartialTeamMatch = true;        // partial match for highlight if true
 /* ------------------------------------------------ */
 
-let allResults = [];      // array of team objects from selected session
-let originalAllResults = []; // keep original for full reset
+let allResults = [];
+let originalAllResults = [];
 let selectedClass = "all";
-let currentSort = { key: null, dir: null }; // {key: 'pos'|'team'|'best'|'laps'|'inc'|'drivers', dir: 'asc'|'desc'}
-let jsonDataGlobal = null; // full json.data for header fields
+let currentSort = { key: null, dir: null };
+let jsonDataGlobal = null;
 
-function getQueryParam(param) {
-  const urlParams = new URLSearchParams(window.location.search);
-  return urlParams.get(param);
+// small mapping for some 3-letter -> 2-letter country codes (useful when JSON uses ISO3 flair_shortname)
+const iso3To2 = {
+  CHE: "CH", GBR: "GB", NLD: "NL", ESP: "ES", DEU: "DE", USA: "US", RUS: "RU", 
+  FRA: "FR", ITA: "IT", CAN: "CA", AUS: "AU", BRA: "BR", CHN: "CN", JPN: "JP",
+  KOR: "KR", SUI: "CH", AND: "AD", NLD: "NL"
+};
+
+// helper: convert 2-letter country code to flag emoji
+function countryToFlag(code) {
+  if (!code || code.length !== 2) return "";
+  const A = 0x1F1E6;
+  const chars = [...code.toUpperCase()].map(c => A + c.charCodeAt(0) - 65);
+  return String.fromCodePoint(...chars);
 }
 
-function msValueToSeconds(value) {
-  // According to your note: "milliseconds by 4 decimals" -> value / 10000 = seconds
-  if (value === null || value === undefined || value <= 0) return null;
-  return value / 10000;
+// safe getters
+function safeGet(obj, ...keys) {
+  for (const k of keys) if (obj && (k in obj) && obj[k] !== undefined && obj[k] !== null) return obj[k];
+  return null;
 }
 
-function formatTimeFromValue(value) {
-  // value is numeric as provided in JSON (we convert using msValueToSeconds)
-  const secs = msValueToSeconds(value);
+// convert value -> seconds (user: value / 10000 = seconds)
+function msValueToSeconds(v) {
+  if (v === null || v === undefined || v <= 0) return null;
+  return v / 10000;
+}
+function formatTimeFromValue(v) {
+  const secs = msValueToSeconds(v);
   if (secs === null) return "-";
   const minutes = Math.floor(secs / 60);
   const seconds = Math.floor(secs % 60);
   const millis = Math.round((secs - Math.floor(secs)) * 1000);
-  return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2,"0")}.${String(millis).padStart(3,"0")}`;
 }
 
-function safeGet(obj, ...keys) {
-  for (const k of keys) {
-    if (obj && (k in obj) && obj[k] !== undefined && obj[k] !== null) return obj[k];
-  }
-  return null;
+function getQueryParam(param) {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get(param);
 }
 
 async function loadResults() {
@@ -115,10 +131,13 @@ async function loadResults() {
     const data = json.data;
     jsonDataGlobal = data;
 
-    // Header info: SOF, Lead changes, Split X/Y
+    // header: find track name/layout (try a few common fields)
+    const trackName = safeGet(data, "track_name", "track", "track_display_name", "trackConfigName", "track_name_full") || "-";
+    const trackLayout = safeGet(data, "track_layout", "track_config_name", "track_layout_name") || "";
+
+    // SOF, lead changes, split
     const sof = safeGet(data, "event_strength_of_field") ?? "—";
     const leadChanges = safeGet(data, "num_lead_changes") ?? "—";
-
     let splitText = "";
     const subs = data.associated_subsession_ids || [];
     const cur = data.subsession_id;
@@ -129,9 +148,10 @@ async function loadResults() {
       splitText = `Split ${splitNum}/${total}`;
     }
 
-    document.getElementById("race-title").innerText = data.season_name || (data.series_name || "iRacing Results");
+    document.getElementById("race-title").innerText = data.season_name || data.series_name || "iRacing Results";
     document.getElementById("race-info").innerHTML = `
       <strong>Series:</strong> ${data.series_name || "—"}<br>
+      <strong>Track:</strong> ${trackName}${ trackLayout ? " — " + trackLayout : "" }<br>
       <strong>Date:</strong> ${new Date(data.end_time).toLocaleString()}<br>
       <strong>Car Classes:</strong> ${data.car_classes?.map(c=>c.name).join(", ") || "—"}<br>
       <strong>Total Drivers:</strong> ${data.num_drivers ?? "—"}<br>
@@ -139,7 +159,7 @@ async function loadResults() {
       <strong>Lead Changes:</strong> ${leadChanges}${ splitText ? "<br><strong>" + splitText + "</strong>" : "" }
     `;
 
-    // pick session: Race > Quali > Practice
+    // pick session (Race > Qual > Practice)
     const sessions = data.session_results || [];
     let session = sessions.find(s => s.simsession_type_name?.toLowerCase().includes("race"))
                || sessions.find(s => s.simsession_type_name?.toLowerCase().includes("qual"))
@@ -147,33 +167,26 @@ async function loadResults() {
                || sessions[0];
 
     if (!session) {
-      document.getElementById("race-info").innerHTML += "<br><em>No valid session found in this file.</em>";
+      document.getElementById("race-info").innerHTML += "<br><em>No valid session found in JSON.</em>";
       return;
     }
 
-    const subtitle = document.createElement("h2");
-    subtitle.textContent = session.simsession_name || "Session Results";
-    document.body.insertBefore(subtitle, document.querySelector("#results-table"));
-
+    // compute numeric helpers and store
     allResults = (session.results || []).map(team => {
-      // augment each team with numeric attributes for sorting
       const overallPos = (team.finish_position !== undefined && team.finish_position !== null) ? team.finish_position : (team.position ?? null);
-      const classPos = team.finish_position_in_class ?? null;
-      const bestVal = (team.best_lap_time && team.best_lap_time > 0) ? team.best_lap_time : null;
-      const avgVal = (team.average_lap && team.average_lap > 0) ? team.average_lap : null;
+      const classPos = (team.finish_position_in_class !== undefined && team.finish_position_in_class !== null) ? team.finish_position_in_class : null;
       return Object.assign({}, team, {
         __numeric: {
           pos_overall: overallPos,
           pos_class: classPos,
-          best: bestVal,
+          best: (team.best_lap_time && team.best_lap_time > 0) ? team.best_lap_time : null,
+          avg: (team.average_lap && team.average_lap > 0) ? team.average_lap : null,
           laps: team.laps_complete ?? 0,
-          inc: team.incidents ?? 0,
-          avg: avgVal
+          inc: team.incidents ?? 0
         }
       });
     });
 
-    // keep a deep copy for reset (shallow copy OK since we won't mutate nested)
     originalAllResults = JSON.parse(JSON.stringify(allResults));
 
     populateClassFilter();
@@ -189,9 +202,7 @@ async function loadResults() {
 
 function populateClassFilter() {
   const select = document.getElementById("classFilter");
-  // clear extras except first
   select.querySelectorAll("option:not([value='all'])").forEach(o => o.remove());
-
   const classes = [...new Set(allResults.map(r => r.car_class_name).filter(Boolean))].sort();
   classes.forEach(c => {
     const opt = document.createElement("option");
@@ -199,13 +210,11 @@ function populateClassFilter() {
     opt.textContent = c;
     select.appendChild(opt);
   });
-
   select.value = "all";
   select.addEventListener("change", (e) => {
     selectedClass = e.target.value;
-    // when switching class, reset sorting arrows but keep currentSort null (so user can sort again)
-    clearSortIndicators();
     currentSort = { key: null, dir: null };
+    clearSortIndicators();
     renderTable();
   });
 }
@@ -214,81 +223,108 @@ function renderTable() {
   const tbody = document.querySelector("#results-table tbody");
   tbody.innerHTML = "";
 
-  let toShow = allResults.slice();
+  // compute view set
+  let view = allResults.slice();
+  if (selectedClass !== "all") view = view.filter(t => t.car_class_name === selectedClass);
 
+  // If class filter active compute class order and assign pos_in_class dynamically
+  const classOrder = {};
   if (selectedClass !== "all") {
-    toShow = toShow.filter(t => t.car_class_name === selectedClass);
+    // sort by finish_position_in_class if exists else by finish_position
+    const tmp = view.slice().sort((a,b) => {
+      const ap = (a.__numeric.pos_class !== null) ? a.__numeric.pos_class : (a.__numeric.pos_overall ?? 1e9);
+      const bp = (b.__numeric.pos_class !== null) ? b.__numeric.pos_class : (b.__numeric.pos_overall ?? 1e9);
+      return ap - bp;
+    });
+    tmp.forEach((t, idx) => { classOrder[t.team_id] = idx + 1; });
   }
 
-  // if currentSort is set, apply it
+  // Apply sort if set
   if (currentSort.key) {
-    toShow.sort((a,b) => compareForSort(a, b, currentSort.key, currentSort.dir));
+    view.sort((a,b) => compareForSort(a,b,currentSort.key,currentSort.dir));
   }
 
-  toShow.forEach((team, idx) => {
-    const driversStr = (team.driver_results || []).map(d => d.display_name).join(", ") || "—";
-    const bestFormatted = team.__numeric.best ? formatTimeFromValue(team.__numeric.best) : "-";
+  // find overall event fastest to color
+  const eventFast = jsonDataGlobal?.event_best_lap_time ?? null;
 
-    // team row
+  view.forEach((team, idx) => {
     const tr = document.createElement("tr");
     tr.classList.add("team-row");
-    tr.setAttribute("data-pos-overall", team.__numeric.pos_overall ?? "");
-    tr.setAttribute("data-pos-class", team.__numeric.pos_class ?? "");
-    tr.setAttribute("data-best", team.__numeric.best ?? "");
-    tr.setAttribute("data-laps", team.__numeric.laps ?? 0);
-    tr.setAttribute("data-inc", team.__numeric.inc ?? 0);
-    tr.setAttribute("data-avg", team.__numeric.avg ?? "");
 
-    // highlight teamName
+    // highlight team
     const teamDisplayLower = (team.display_name || "").toLowerCase();
     const targetLower = (teamName || "").toLowerCase();
     const isMatch = usePartialTeamMatch ? teamDisplayLower.includes(targetLower) : (teamDisplayLower === targetLower);
     if (isMatch) tr.classList.add("highlight-team");
 
+    // compute shown position
+    let posShown = "-";
+    if (selectedClass !== "all") {
+      posShown = classOrder[team.team_id] !== undefined ? classOrder[team.team_id] : (team.__numeric.pos_class !== null ? (team.__numeric.pos_class + 1) : (team.__numeric.pos_overall !== null ? (team.__numeric.pos_overall + 1) : "-"));
+    } else {
+      posShown = (team.__numeric.pos_overall !== null && team.__numeric.pos_overall !== undefined) ? (team.__numeric.pos_overall + 1) : "-";
+    }
+
+    // add medal emojis for podium in class (if filtered)
+    let posHtml = escapeHtml(String(posShown));
+    if (selectedClass !== "all" && typeof posShown === "number") {
+      if (posShown === 1) posHtml = `1 <span title="Class Winner">🥇</span>`;
+      else if (posShown === 2) posHtml = `2 <span title="Class P2">🥈</span>`;
+      else if (posShown === 3) posHtml = `3 <span title="Class P3">🥉</span>`;
+    }
+
+    // best lap formatting; highlight if matches event fastest
+    const bestRaw = team.__numeric.best;
+    const bestStr = bestRaw ? formatTimeFromValue(bestRaw) : "-";
+    const bestClass = (eventFast && bestRaw && eventFast === bestRaw) ? "fastest" : "";
+
+    // Car name
+    const carName = team.car_name || "-";
+    const className = team.car_class_name || "-";
+
+    // assemble row; team-only: drivers not shown in main table as requested
     tr.innerHTML = `
-      <td class="toggle-button" style="width:70px">${(team.__numeric.pos_overall !== null && team.__numeric.pos_overall !== undefined) ? (team.__numeric.pos_overall + 1) : "-"}</td>
+      <td class="toggle-button">${posHtml}</td>
       <td>${escapeHtml(team.display_name || "-")}</td>
-      <td>${escapeHtml(driversStr)}</td>
-      <td>${escapeHtml(team.car_class_name || team.car_name || "-")}</td>
-      <td>${bestFormatted}</td>
+      <td>${escapeHtml( (team.driver_results || []).map(d=>d.display_name).join(", ") || "-" )}</td>
+      <td>${escapeHtml(className)}</td>
+      <td>${escapeHtml(carName)}</td>
+      <td class="${bestClass}">${escapeHtml(bestStr)}</td>
       <td>${team.laps_complete ?? 0}</td>
       <td>${team.incidents ?? 0}</td>
     `;
 
-    // click to toggle an expand / collapse driver block
+    // toggle expand/collapse on click of row
     tr.addEventListener("click", (ev) => {
-      // ignore clicks if user clicked a header sortable (not relevant here)
-      // toggle driver block
+      // if next sibling is driver-row -> collapse
       const next = tr.nextElementSibling;
       if (next && next.classList.contains("driver-row")) {
-        // currently expanded -> remove
         next.remove();
-      } else {
-        // create driver sub-row
-        const dr = document.createElement("tr");
-        dr.classList.add("driver-row");
-        const td = document.createElement("td");
-        td.colSpan = 7;
-        td.style.padding = "10px 12px";
-        td.innerHTML = buildDriverTable(team);
-        dr.appendChild(td);
-        // insert after team row
-        tr.parentNode.insertBefore(dr, tr.nextSibling);
+        return;
       }
+      // else build driver subrow
+      const dr = document.createElement("tr");
+      dr.classList.add("driver-row");
+      const td = document.createElement("td");
+      td.colSpan = 8;
+      td.style.padding = "10px";
+      td.innerHTML = buildDriverTable(team, eventFast);
+      dr.appendChild(td);
+      tr.parentNode.insertBefore(dr, tr.nextSibling);
+      // scroll into view slightly
+      dr.scrollIntoView({behavior:"smooth", block:"nearest"});
     });
 
     tbody.appendChild(tr);
-    // folded by default (no driver rows inserted)
   });
 
-  // reapply header arrows if any
   applySortIndicatorToHeader();
 }
 
-function buildDriverTable(team) {
-  // columns: Name, Club, License, Rating, Team Laps, Laps Led, Avg Lap, Fastest Lap, Fast Lap Nr, Laps Comp, Inc, Champ Pts, Div
+function buildDriverTable(team, eventFast) {
   const drivers = team.driver_results || [];
   const teamLaps = team.laps_complete ?? "-";
+
   let html = `<table class="driver-table"><thead><tr>
     <th>Name</th><th>Club</th><th>License</th><th>Rating</th><th>Team Laps</th><th>Laps Led</th>
     <th>Avg Lap</th><th>Fastest Lap</th><th>Fast Lap Nr</th><th>Laps Comp</th><th>Inc</th><th>Champ Pts</th><th>Div</th>
@@ -296,29 +332,61 @@ function buildDriverTable(team) {
 
   drivers.forEach(d => {
     const name = d.display_name || "-";
-    const club = d.club_name || d.flair_name || d.country_code || "-";
-    // license: try new_license_level, old, or license fields
-    const license = d.new_license_level ?? d.old_license_level ?? d.license ?? "-";
-    const rating = d.newi_rating ?? d.new_ttrating ?? d.oldi_rating ?? d.old_ttrating ?? "-";
+
+    // club / flag: prefer 2-letter country_code; else flair_shortname (maybe 3-letter)
+    let country = d.country_code || d.flair_shortname || d.flair_name || d.friend || "";
+    let flag = "";
+    if (country && country.length === 2) flag = countryToFlag(country);
+    else if (country && country.length === 3 && iso3To2[country.toUpperCase()]) flag = countryToFlag(iso3To2[country.toUpperCase()]);
+    // label finalClub: show flag + country name if available
+    const clubLabel = (flag ? `<span class="flag">${flag}</span>` : "") + (d.flair_name || d.country_code || "-");
+
+    // License: map numeric license level to letter using allowed_licenses ranges if available
+    const licenseLetter = getLicenseLetterForDriver(d);
+    // safety rating: use old_sub_level/new_sub_level scaled /100 (show prior and delta)
+    const oldSub = safeGet(d, "old_sub_level");
+    const newSub = safeGet(d, "new_sub_level");
+    let safetyStr = "-";
+    if (oldSub !== null) {
+      const prior = (oldSub/100);
+      const delta = (newSub !== null) ? ((newSub/100) - prior) : 0;
+      const sign = delta > 0 ? `+${delta.toFixed(1)}` : (delta < 0 ? `${delta.toFixed(1)}` : `+0.0`);
+      safetyStr = `${licenseLetter} ${prior.toFixed(1)} ${sign}`;
+    } else {
+      safetyStr = licenseLetter || "-";
+    }
+
+    // iRating: oldi_rating and newi_rating numeric
+    const oldIr = safeGet(d, "oldi_rating");
+    const newIr = safeGet(d, "newi_rating");
+    let irStr = "-";
+    if (oldIr !== null) {
+      const delta = (newIr !== null) ? (newIr - oldIr) : 0;
+      const sign = delta > 0 ? `+${delta}` : (delta < 0 ? `${delta}` : `+0`);
+      irStr = `${oldIr} ${sign}`;
+    }
 
     const lapsLed = d.laps_lead ?? 0;
     const avgLap = d.average_lap ? formatTimeFromValue(d.average_lap) : "-";
     const fastest = d.best_lap_time ? formatTimeFromValue(d.best_lap_time) : "-";
-    const fastLapNr = d.best_lap_num ?? "-";
+    const fastLapNr = (d.best_lap_num !== undefined && d.best_lap_num !== null) ? d.best_lap_num : "-";
     const lapsComp = d.laps_complete ?? 0;
     const inc = d.incidents ?? 0;
     const champPts = d.champ_points ?? d.aggregate_champ_points ?? 0;
     const div = d.division_name || (d.division !== undefined && d.division !== null ? d.division : "-");
 
+    // color fastest lap if equals event fastest
+    const fastestClass = (eventFast && d.best_lap_time && eventFast === d.best_lap_time) ? "fastest" : "";
+
     html += `<tr>
       <td>${escapeHtml(name)}</td>
-      <td>${escapeHtml(club)}</td>
-      <td>${escapeHtml(String(license))}</td>
-      <td>${escapeHtml(String(rating))}</td>
+      <td>${clubLabel}</td>
+      <td>${escapeHtml(safetyStr)}</td>
+      <td>${escapeHtml(irStr)}</td>
       <td>${escapeHtml(String(teamLaps))}</td>
       <td>${escapeHtml(String(lapsLed))}</td>
       <td>${escapeHtml(avgLap)}</td>
-      <td>${escapeHtml(fastest)}</td>
+      <td class="${fastestClass}">${escapeHtml(fastest)}</td>
       <td>${escapeHtml(String(fastLapNr))}</td>
       <td>${escapeHtml(String(lapsComp))}</td>
       <td>${escapeHtml(String(inc))}</td>
@@ -331,51 +399,67 @@ function buildDriverTable(team) {
   return html;
 }
 
+/* ---------- License letter mapping using allowed_licenses in JSON ---------- */
+function getLicenseLetterForDriver(driver) {
+  const lvl = safeGet(driver, "old_license_level", "new_license_level");
+  if (lvl === null) return "-";
+  const allowed = (jsonDataGlobal && jsonDataGlobal.allowed_licenses) ? jsonDataGlobal.allowed_licenses : null;
+  if (allowed && Array.isArray(allowed)) {
+    // find entry where level between min and max (inclusive)
+    for (const a of allowed) {
+      const minL = a.min_license_level ?? a.min_license_level;
+      const maxL = a.max_license_level ?? a.max_license_level;
+      if (minL !== undefined && maxL !== undefined) {
+        if (lvl >= minL && lvl <= maxL) {
+          const name = a.group_name || "";
+          // group_name like "Class D" -> extract single letter or "Pro"
+          const m = name.match(/Class\s+([A-Z])/i);
+          if (m) return m[1].toUpperCase();
+          // otherwise return 'Pro' or exact name
+          return name;
+        }
+      }
+    }
+  }
+  // fallback heuristic: map numeric ranges commonly used: <=8 -> D, <=12 -> C, <=16 -> B, <=20 -> A, <=24 -> Pro, <=28 -> Pro/WC
+  if (lvl <= 8) return "D";
+  if (lvl <= 12) return "C";
+  if (lvl <= 16) return "B";
+  if (lvl <= 20) return "A";
+  if (lvl <= 24) return "Pro";
+  return "Pro/WC";
+}
+
+/* ---------------- Sorting logic ---------------- */
 function enableTableSorting() {
-  const table = document.getElementById("results-table");
-  const headers = table.querySelectorAll("th.sortable");
-  headers.forEach(h => {
-    h.addEventListener("click", () => {
-      const key = h.getAttribute("data-key");
-      // determine new direction
-      const currently = h.classList.contains("asc") ? "asc" : h.classList.contains("desc") ? "desc" : null;
-      const newDir = currently === "asc" ? "desc" : "asc";
-
-      // reset other headers
-      clearSortIndicators();
-      h.classList.add(newDir);
-
-      // store current sort
-      currentSort = { key: key, dir: newDir };
-
-      // re-render table using sort
-      renderTable();
-    });
-  });
+  const headers = document.querySelectorAll("th.sortable");
+  headers.forEach(h => h.addEventListener("click", () => {
+    const key = h.getAttribute("data-key");
+    const already = h.classList.contains("asc") ? "asc" : h.classList.contains("desc") ? "desc" : null;
+    const newDir = already === "asc" ? "desc" : "asc";
+    clearSortIndicators();
+    h.classList.add(newDir);
+    currentSort = { key: key, dir: newDir };
+    renderTable();
+  }));
 }
 
 function clearSortIndicators() {
   document.querySelectorAll("th.sortable").forEach(h => h.classList.remove("asc","desc"));
 }
-
 function applySortIndicatorToHeader() {
   if (!currentSort.key) return;
   const th = document.querySelector(`th.sortable[data-key="${currentSort.key}"]`);
-  if (th) {
-    th.classList.remove("asc","desc");
-    th.classList.add(currentSort.dir);
-  }
+  if (th) { th.classList.remove("asc","desc"); th.classList.add(currentSort.dir); }
 }
 
-function compareForSort(a, b, key, dir) {
-  // returns negative if a<b for asc
+function compareForSort(a,b,key,dir) {
   const d = dir === "asc" ? 1 : -1;
-
   if (key === "pos") {
-    // if class filter active, use pos_class, else pos_overall
     if (selectedClass !== "all") {
-      const aa = a.__numeric.pos_class ?? 1e9;
-      const bb = b.__numeric.pos_class ?? 1e9;
+      // sort by class position (if available) else by overall pos
+      const aa = (a.__numeric.pos_class !== null) ? a.__numeric.pos_class : (a.__numeric.pos_overall ?? 1e9);
+      const bb = (b.__numeric.pos_class !== null) ? b.__numeric.pos_class : (b.__numeric.pos_overall ?? 1e9);
       return (aa - bb) * d;
     } else {
       const aa = (a.__numeric.pos_overall ?? 1e9);
@@ -383,57 +467,48 @@ function compareForSort(a, b, key, dir) {
       return (aa - bb) * d;
     }
   }
-
   if (key === "team") {
-    const aa = (a.display_name || "").toLowerCase();
-    const bb = (b.display_name || "").toLowerCase();
-    return aa.localeCompare(bb) * d;
+    return (a.display_name || "").toLowerCase().localeCompare((b.display_name||"").toLowerCase()) * d;
   }
-
   if (key === "drivers") {
     const aa = ((a.driver_results || []).map(x=>x.display_name).join(",")).toLowerCase();
     const bb = ((b.driver_results || []).map(x=>x.display_name).join(",")).toLowerCase();
     return aa.localeCompare(bb) * d;
   }
-
   if (key === "best") {
     const aa = a.__numeric.best ?? 1e12;
     const bb = b.__numeric.best ?? 1e12;
     return (aa - bb) * d;
   }
-
   if (key === "laps") {
     const aa = a.__numeric.laps ?? 0;
     const bb = b.__numeric.laps ?? 0;
     return (aa - bb) * d;
   }
-
   if (key === "inc") {
     const aa = a.__numeric.inc ?? 0;
     const bb = b.__numeric.inc ?? 0;
     return (aa - bb) * d;
   }
-
-  // fallback: string compare of rendered team name
   return ((a.display_name||"").toLowerCase().localeCompare((b.display_name||"").toLowerCase())) * d;
 }
 
+/* ---------------- Reset button ---------------- */
 function setupResetButton() {
   const btn = document.getElementById("resetBtn");
   btn.addEventListener("click", () => {
-    // full reset: reset class filter to all, clear sorting, re-fold everything
+    // full reset
     selectedClass = "all";
     document.getElementById("classFilter").value = "all";
     currentSort = { key: null, dir: null };
     clearSortIndicators();
-    // restore original results (in case we mutated)
     allResults = JSON.parse(JSON.stringify(originalAllResults));
     renderTable();
-    // scroll to top
     window.scrollTo({top:0, behavior:"smooth"});
   });
 }
 
+/* -------------- small util -------------- */
 function escapeHtml(text) {
   if (text === null || text === undefined) return "";
   return String(text)
@@ -444,7 +519,7 @@ function escapeHtml(text) {
     .replace(/'/g, "&#039;");
 }
 
-// initial load
+/* ----------------- start ----------------- */
 loadResults();
 </script>
 </body>
