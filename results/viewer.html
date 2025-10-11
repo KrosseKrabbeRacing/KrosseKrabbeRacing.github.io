@@ -59,6 +59,12 @@ const usePartialTeamMatch=true;
 let allResults=[],originalAllResults=[],selectedClass="all",currentSort={key:null,dir:null},jsonDataGlobal=null,classFastestMap={};
 
 function safeGet(o,...k){for(const x of k)if(o&&x in o&&o[x]!=null)return o[x];return null;}
+function countryToFlag(code){
+  if(!code)return"";if(code==="EN")return"🏴";
+  if(code.length===2){const A=0x1F1E6;return String.fromCodePoint(...[...code.toUpperCase()].map(c=>A+c.charCodeAt(0)-65));}
+  return"";
+}
+function getDriverCountry(d){const cc=safeGet(d,"country_code");if(cc&&cc.length===2)return cc.toUpperCase();const fl=safeGet(d,"flair_shortname");if(fl&&fl.length===3)return fl.substring(0,2).toUpperCase();return"";}
 function msValueToSeconds(v){return v>0?v/10000:null;}
 function formatTime(v){const s=msValueToSeconds(v);if(!s)return"-";const m=Math.floor(s/60),sec=Math.floor(s%60),ms=Math.round((s%1)*1000);return`${m}:${String(sec).padStart(2,"0")}.${String(ms).padStart(3,"0")}`;}
 function pad2(n){return String(n).padStart(2,"0");}
@@ -96,8 +102,9 @@ function populateClassFilter(){
 
 function renderTable(){
   const tb=document.querySelector("#results-table tbody");tb.innerHTML="";
-  const leaderLaps=Math.max(...allResults.map(x=>x.laps_complete??0),0);
+  const overallLeaderLaps=Math.max(...allResults.map(x=>x.laps_complete??0),0);
   let view=selectedClass==="all"?allResults.slice():allResults.filter(x=>x.car_class_name===selectedClass);
+  const classLeaderLaps=Math.max(...view.map(x=>x.laps_complete??0),0);
   const classOrder={};if(selectedClass!=="all"){view.slice().sort((a,b)=>(a.__n.posc??1e9)-(b.__n.posc??1e9)).forEach((t,i)=>classOrder[t.team_id]=i+1);}
   if(currentSort.key)view.sort((a,b)=>compareSort(a,b,currentSort.key,currentSort.dir));
   view.forEach(t=>{
@@ -108,7 +115,8 @@ function renderTable(){
     let posTxt=pos;if(pos===1)posTxt=`1 🥇`;else if(pos===2)posTxt=`2 🥈`;else if(pos===3)posTxt=`3 🥉`;
     const best=formatTime(t.__n.best),cb=classFastestMap[t.car_class_name];const bestC=cb&&t.__n.best&&cb===t.__n.best?"fastest":"";
     const start=t.starting_position??"-";
-    const lapsBehind=leaderLaps-(t.laps_complete??0);const interval=lapsBehind===0?"On Lead Lap":`–${lapsBehind} Lap${lapsBehind>1?"s":""}`;
+    let lapsBehind=(selectedClass==="all"?overallLeaderLaps:classLeaderLaps)-(t.laps_complete??0);
+    const interval=lapsBehind===0?"-":`–${lapsBehind} Lap${lapsBehind>1?"s":""}`;
     const dnf=(t.reason_out&&t.reason_out.toLowerCase()!=="running")||(t.reason_out_id&&t.reason_out_id!==0);
     tr.innerHTML=`<td>${posTxt}</td><td>${name}${dnf?'<span class="dnf">DNF</span>':""}</td><td>${t.car_class_name||"-"}</td><td>${t.car_name||"-"}</td><td>${start}</td><td>${interval}</td><td class="${bestC}">${best}</td><td>${t.laps_complete??0}</td><td>${t.incidents??0}</td>`;
     tr.onclick=()=>{const n=tr.nextElementSibling;if(n&&n.classList.contains("driver-row"))n.remove();else{const dr=document.createElement("tr");dr.classList.add("driver-row");const td=document.createElement("td");td.colSpan=9;td.innerHTML=buildDrivers(t);dr.appendChild(td);tr.after(dr);}};
@@ -118,12 +126,13 @@ function renderTable(){
 
 function buildDrivers(t){
   const d=t.driver_results||[],cb=classFastestMap[t.car_class_name];
-  let h=`<table class="driver-table"><thead><tr><th>Name</th><th>License</th><th>Rating</th><th>Laps</th><th>Laps Led</th><th>Avg Lap</th><th>Fastest Lap</th><th>Fast Lap Nr</th><th>Inc</th><th>Champ Pts</th><th>Div</th></tr></thead><tbody>`;
+  let h=`<table class="driver-table"><thead><tr><th>Name</th><th>Country</th><th>License</th><th>Rating</th><th>Laps</th><th>Laps Led</th><th>Avg Lap</th><th>Fastest Lap</th><th>Fast Lap Nr</th><th>Inc</th><th>Champ Pts</th><th>Div</th></tr></thead><tbody>`;
   d.forEach(x=>{
+    const country=getDriverCountry(x);const flag=countryToFlag(country);
     const L=getLicenseLetter(x),os=x.old_sub_level,ns=x.new_sub_level;let lic="-";if(os!=null){const p=os/100,Δ=(ns!=null?(ns-os)/100:0);const s=Δ>0?`+${Δ.toFixed(1)}`:Δ.toFixed(1);lic=`${L} ${p.toFixed(1)} ${s}`;}
     const oi=x.oldi_rating,ni=x.newi_rating;let ir="-";if(oi!=null){const Δ=(ni!=null?ni-oi:0);const s=Δ>0?`+${Δ}`:Δ.toString();ir=`${oi} ${s}`;}
     const avg=x.average_lap?formatTime(x.average_lap):"-",f=x.best_lap_time?formatTime(x.best_lap_time):"-",fn=x.best_lap_num??"-";
-    const fast=(cb&&x.best_lap_time&&cb===x.best_lap_time)?"fastest":"";h+=`<tr><td>${x.display_name||"-"}</td><td>${lic}</td><td>${ir}</td><td>${x.laps_complete??0}</td><td>${x.laps_lead??0}</td><td>${avg}</td><td class="${fast}">${f}</td><td>${fn}</td><td>${x.incidents??0}</td><td>${x.champ_points??0}</td><td>${x.division_name||x.division||"-"}</td></tr>`;
+    const fast=(cb&&x.best_lap_time&&cb===x.best_lap_time)?"fastest":"";h+=`<tr><td>${x.display_name||"-"}</td><td>${flag}</td><td>${lic}</td><td>${ir}</td><td>${x.laps_complete??0}</td><td>${x.laps_lead??0}</td><td>${avg}</td><td class="${fast}">${f}</td><td>${fn}</td><td>${x.incidents??0}</td><td>${x.champ_points??0}</td><td>${x.division_name||x.division||"-"}</td></tr>`;
   });return h+"</tbody></table>";
 }
 
